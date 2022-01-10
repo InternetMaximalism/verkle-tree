@@ -1,0 +1,21 @@
+[package]
+name = "verkle-tree"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.51"
+blake2s_simd = "1.0.0"
+bytes = "1.1"
+byteorder = "1.4"
+ff = "0.11.0"
+hex = "0.4"
+neptune = "5.1.0"
+num-bigint = "0.3"
+rand = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+typenum = "1.15.0"
+franklin-crypto = {git = "https://github.com/matter-labs/franklin-crypto", branch = "beta", features = ["multicore", "plonk"]}
