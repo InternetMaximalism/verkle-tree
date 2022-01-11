@@ -1,11 +1,14 @@
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::{JubjubBn256, JubjubEngine, Unknown};
-use franklin_crypto::bellman::plonk::commitments::transcript::{
-  Blake2sTranscript, Prng, Transcript,
-};
-use franklin_crypto::bellman::{CurveAffine, Field, PrimeField, PrimeFieldRepr};
+use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
+use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 
-use crate::ipa::{check_ipa_proof, IpaConfig, IpaProof};
+use crate::ipa::config::IpaConfig;
+use crate::ipa::proof::IpaProof;
+use crate::ipa::transcript::{Bn256Transcript, PoseidonBn256Transcript};
+use crate::ipa::utils::fr_to_fs;
+use crate::ipa::{Bn256Ipa, Ipa};
+
 // pub fn create_multi_proof(transcript : Transcript, ipaConf : IPAConfig, Cs:  &[PointAffine], fs : &[Vec<F>], zs: &[u8]) -> MultiProof {
 // 	transcript.DomainSep("multiproof");
 
@@ -109,111 +112,127 @@ pub fn read_point_le<F: PrimeField>(reader: &mut std::io::Cursor<Vec<u8>>) -> an
   Ok(result)
 }
 
-pub fn check_multi_proof<E: JubjubEngine>(
-  transcript_params: &E::Fs,
-  ipa_conf: IpaConfig<E::Fs>,
-  proof: IpaProof<E::Fs>,
-  d: &Point<E, Unknown>,
-  commitments: Vec<Point<E, Unknown>>,
-  ys: Vec<E::Fs>,
-  zs: Vec<u8>,
-  jubjub_params: &E::Params,
-) -> anyhow::Result<bool> {
-  let mut transcript = Blake2sTranscript::new(transcript_params);
+trait BatchProof<E: JubjubEngine> {
+  fn check_multi_proof(
+    transcript_params: E::Fr,
+    ipa_conf: IpaConfig<E>,
+    proof: IpaProof<E::Fr>,
+    d: &Point<E, Unknown>,
+    commitments: Vec<Point<E, Unknown>>,
+    ys: Vec<E::Fr>,
+    zs: Vec<u8>,
+    jubjub_params: &E::Params,
+  ) -> anyhow::Result<bool>;
+}
 
-  if commitments.len() != ys.len() {
-    panic!(
-      "number of commitments = {}, while number of output points = {}",
-      commitments.len(),
-      ys.len()
-    );
+pub struct Bn256BatchProof;
+
+impl BatchProof<Bn256> for Bn256BatchProof {
+  fn check_multi_proof(
+    transcript_params: Fr,
+    ipa_conf: IpaConfig<Bn256>,
+    proof: IpaProof<Fr>,
+    d: &Point<Bn256, Unknown>,
+    commitments: Vec<Point<Bn256, Unknown>>,
+    ys: Vec<Fr>,
+    zs: Vec<u8>,
+    jubjub_params: &<Bn256 as JubjubEngine>::Params,
+  ) -> anyhow::Result<bool> {
+    let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
+
+    if commitments.len() != ys.len() {
+      panic!(
+        "number of commitments = {}, while number of output points = {}",
+        commitments.len(),
+        ys.len()
+      );
+    }
+    if commitments.len() != zs.len() {
+      panic!(
+        "number of commitments = {}, while number of input points = {}",
+        commitments.len(),
+        zs.len()
+      );
+    }
+
+    let num_queries = commitments.len();
+    if num_queries == 0 {
+      // XXX: does this need to be a panic?
+      // XXX: this comment is also in CreateMultiProof
+      panic!("cannot create a multiproof with no data");
+    }
+
+    for i in 0..num_queries {
+      let (c_x, c_y) = commitments[i].into_xy();
+      transcript.commit_field_element(&c_x)?; // commitments[i]_x
+      transcript.commit_field_element(&c_y)?; // commitments[i]_y
+      let reader = &mut std::io::Cursor::new(vec![zs[i]]);
+      let z_i = read_point_le::<Fr>(reader).unwrap();
+      transcript.commit_field_element(&z_i)?;
+      transcript.commit_field_element(&ys[i])?;
+    }
+
+    let r: Fr = transcript.get_challenge();
+
+    let (d_x, d_y) = d.into_xy();
+    transcript.commit_field_element(&d_x)?; // D_x
+    transcript.commit_field_element(&d_y)?; // D_y
+    let t: Fr = transcript.get_challenge();
+
+    // Compute helper_scalars. This is r^i / t - z_i
+    //
+    // There are more optimal ways to do this, but
+    // this is more readable, so will leave for now
+    let mut minus_one = <Bn256 as JubjubEngine>::Fs::one();
+    minus_one.negate(); // minus_one = -1
+    let mut helper_scalars: Vec<Fr> = Vec::with_capacity(num_queries);
+    let mut powers_of_r = Fr::one(); // powers_of_r = 1
+    for i in 0..num_queries {
+      // helper_scalars[i] = r^i / (t - z_i)
+      let mut reader = std::io::Cursor::new(vec![zs[i]]);
+      let z_i = read_point_le::<Fr>(&mut reader).unwrap();
+      let mut t_minus_z_i = t;
+      t_minus_z_i.sub_assign(&z_i); // t - z_i
+      let mut helper_scalars_i = t_minus_z_i.pow(minus_one.into_repr()); // 1 / (t - z_i)
+      helper_scalars_i.mul_assign(&powers_of_r); // r^i / (t - z_i)
+      helper_scalars.push(helper_scalars_i);
+
+      // powers_of_r *= r
+      powers_of_r.mul_assign(&r);
+    }
+
+    // Compute g_2(t) = SUM y_i * (r^i / t - z_i) = SUM y_i * helper_scalars
+    let mut g_2_t = Fr::zero();
+    for i in 0..num_queries {
+      let mut tmp = ys[i];
+      tmp.mul_assign(&helper_scalars[i]);
+      g_2_t.add_assign(&tmp);
+    }
+
+    // Compute E = \sum_{i = 0}^{num_queries - 1} C_i * (r^i / t - z_i)
+    let mut e = Point::zero();
+    for (i, c_i) in commitments.iter().enumerate() {
+      let tmp = c_i.mul(fr_to_fs::<Bn256>(&helper_scalars[i])?, &jubjub_params); // c_i * helper_scalars_i
+      e = e.add(&tmp, &jubjub_params); // e += c_i * helper_scalars_i
+    }
+
+    let (e_x, e_y) = e.into_xy();
+    transcript.commit_field_element(&e_x)?; // E_x
+    transcript.commit_field_element(&e_y)?; // E_y
+
+    let minus_d = d.negate();
+    let e_minus_d = e.add(&minus_d, &jubjub_params);
+
+    let ipa_commitment = e_minus_d;
+    let transcript_params = transcript.get_challenge();
+    Bn256Ipa::check_ipa_proof(
+      ipa_commitment,
+      proof,
+      t,
+      g_2_t,
+      ipa_conf,
+      jubjub_params,
+      transcript_params,
+    )
   }
-  if commitments.len() != zs.len() {
-    panic!(
-      "number of commitments = {}, while number of input points = {}",
-      commitments.len(),
-      zs.len()
-    );
-  }
-
-  let num_queries = commitments.len();
-  if num_queries == 0 {
-    // XXX: does this need to be a panic?
-    // XXX: this comment is also in CreateMultiProof
-    panic!("cannot create a multiproof with no data");
-  }
-
-  for i in 0..num_queries {
-    let (c_x, c_y) = commitments[i].into_xy();
-    transcript.commit_field_element(&c_x); // commitments[i]_x
-    transcript.commit_field_element(&c_y); // commitments[i]_y
-    let reader = &mut std::io::Cursor::new(vec![zs[i]]);
-    let z_i = read_point_le::<E::Fs>(reader).unwrap();
-    transcript.commit_field_element(&z_i);
-    transcript.commit_field_element(&ys[i]);
-  }
-
-  let r: E::Fs = transcript.get_challenge();
-
-  let (d_x, d_y) = d.into_xy();
-  transcript.commit_field_element(&d_x); // D_x
-  transcript.commit_field_element(&d_y); // D_y
-  let t: E::Fs = transcript.get_challenge();
-
-  // Compute helper_scalars. This is r^i / t - z_i
-  //
-  // There are more optimal ways to do this, but
-  // this is more readable, so will leave for now
-  let mut minus_one = E::Fs::one();
-  minus_one.negate(); // minus_one = -1
-  let mut helper_scalars: Vec<E::Fs> = Vec::with_capacity(num_queries);
-  let mut powers_of_r = E::Fs::one(); // powers_of_r = 1
-  for i in 0..num_queries {
-    // helper_scalars[i] = r^i / (t - z_i)
-    let mut reader = std::io::Cursor::new(vec![zs[i]]);
-    let z_i: E::Fs = read_point_le::<E::Fs>(&mut reader).unwrap();
-    let t_minus_z_i = t.sub(&z_i)?;
-    let inverse_of_t_minus_z_i = t_minus_z_i.pow(&minus_one)?;
-    let helper_scalars_i = inverse_of_t_minus_z_i.mul(&powers_of_r)?;
-    helper_scalars.push(helper_scalars_i);
-
-    // powers_of_r *= r
-    powers_of_r.mul_assign(&r);
-  }
-
-  // Compute g_2(t) = SUM y_i * (r^i / t - z_i) = SUM y_i * helper_scalars
-  let mut g_2_t = E::Fs::zero();
-  for i in 0..num_queries {
-    let mut tmp = ys[i];
-    tmp.mul_assign(&helper_scalars[i]);
-    g_2_t.add_assign(&tmp);
-  }
-
-  // Compute E = SUM C_i * (r^i / t - z_i) = SUM C_i * helper_scalars
-  let zero = E::Fs::zero();
-  let mut e = Point::zero();
-  for i in 0..num_queries {
-    let mut tmp = commitments[i];
-    tmp = tmp.mul(helper_scalars[i], &jubjub_params);
-    e = e.add(&tmp, &jubjub_params);
-  }
-
-  let (e_x, e_y) = e.into_xy();
-  transcript.commit_field_element(&e_x); // E_x
-  transcript.commit_field_element(&e_y); // E_y
-
-  let minus_d = d.negate();
-  let e_minus_d = e.add(&minus_d, &jubjub_params);
-
-  let ipa_commitment = e_minus_d;
-  let transcript_params = transcript.get_challenge();
-  check_ipa_proof(
-    ipa_commitment,
-    proof,
-    t,
-    g_2_t,
-    ipa_conf,
-    jubjub_params,
-    transcript_params,
-  )
 }

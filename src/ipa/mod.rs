@@ -6,7 +6,7 @@ pub mod utils;
 use std::io::{Error, ErrorKind};
 
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::{JubjubEngine, PrimeOrder, Unknown};
+use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
 use franklin_crypto::bellman::{Field, PrimeField};
 
@@ -17,30 +17,30 @@ use crate::ipa::utils::{commit, fold_points, fold_scalars, fr_to_fs};
 
 use self::proof::IpaProof;
 
-trait Ipa<E: JubjubEngine> {
+pub trait Ipa<E: JubjubEngine> {
   fn check_ipa_proof(
-    commitment: Point<E, PrimeOrder>,
+    commitment: Point<E, Unknown>,
     proof: IpaProof<E::Fr>,
     eval_point: E::Fr,
     inner_prod: E::Fr,
     ipa_conf: IpaConfig<E>,
     jubjub_params: &E::Params,
-    transcript_params: &E::Fr,
+    transcript_params: E::Fr,
   ) -> anyhow::Result<bool>;
 }
-struct Bn256Ipa;
+pub struct Bn256Ipa;
 
 impl Ipa<Bn256> for Bn256Ipa {
   fn check_ipa_proof(
-    commitment: Point<Bn256, PrimeOrder>,
+    commitment: Point<Bn256, Unknown>,
     proof: IpaProof<Fr>,
     eval_point: Fr,
     inner_prod: Fr,
     ipa_conf: IpaConfig<Bn256>,
     jubjub_params: &<Bn256 as JubjubEngine>::Params,
-    transcript_params: &Fr,
+    transcript_params: Fr,
   ) -> anyhow::Result<bool> {
-    let mut transcript = PoseidonBn256Transcript::new(transcript_params);
+    let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
     // transcript.consume("ipa", cs);
 
     // println!("{:?}", self.proof);
@@ -87,7 +87,7 @@ impl Ipa<Bn256> for Bn256Ipa {
     let qy = ipa_conf.q.clone();
     let q = q.mul(fr_to_fs::<Bn256>(&w)?, &jubjub_params);
     let qy = qy.mul(fr_to_fs::<Bn256>(&inner_prod)?, &jubjub_params);
-    let mut commitment = Point::<Bn256, Unknown>::from(commitment.add(&qy.clone(), &jubjub_params));
+    let mut commitment = commitment.add(&Point::<Bn256, Unknown>::from(qy.clone()), &jubjub_params);
 
     let challenges = generate_challenges(&proof.clone(), &mut transcript).unwrap();
 
