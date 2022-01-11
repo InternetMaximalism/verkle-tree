@@ -1,0 +1,22 @@
+[package]
+name = "ff_utils"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+ff = { version = "0.11.0", features = ["default", "derive"] }
+group = "0.10"
+pairing_ce = "0.24.2"
+subtle = "2.4"
+byteorder = "1"
+bitvec = "0.22"
+rand_core = "0.6"
+num = "0.4"
+hex = "0.4.3"
+serde = { version = "^1.0.101", features = ["derive"] }
+futures = {package = "futures", version = "0.3", default_features = false, features = ["executor", "thread-pool"]}
+num_cpus = "1"
+crossbeam = "0.7"
+
+[lib]
+name = "ff_utils"

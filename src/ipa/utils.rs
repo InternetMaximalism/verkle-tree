@@ -1,7 +1,10 @@
 use std::io::{Error, ErrorKind};
 
+// use ff_utils::{Bn256Fr, FromBytes, ToBytes};
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::{FixedGenerators, JubjubEngine, JubjubParams, PrimeOrder};
+use franklin_crypto::babyjubjub::{
+  FixedGenerators, JubjubEngine, JubjubParams, PrimeOrder, Unknown,
+};
 use franklin_crypto::bellman::{PrimeField, PrimeFieldRepr};
 
 pub fn from_bytes_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
@@ -73,13 +76,15 @@ pub fn fold_points<E: JubjubEngine>(
 }
 
 pub fn multi_scalar<E: JubjubEngine>(
-  points: &[Point<E, PrimeOrder>],
+  points: &[Point<E, Unknown>],
   scalars: &[E::Fs],
   jubjub_params: &E::Params,
-) -> anyhow::Result<Point<E, PrimeOrder>> {
-  let mut result = jubjub_params
-    .generator(FixedGenerators::ProofGenerationKey)
-    .clone(); // E::G1Affine::one()
+) -> anyhow::Result<Point<E, Unknown>> {
+  let mut result = Point::<E, Unknown>::from(
+    jubjub_params
+      .generator(FixedGenerators::ProofGenerationKey)
+      .clone(),
+  ); // E::G1Affine::one()
   for i in 0..points.len() {
     let mut tmp = points[i].clone();
     tmp = tmp.mul(scalars[i], jubjub_params); // tmp = points[i] * scalars[i]
@@ -93,10 +98,10 @@ pub fn multi_scalar<E: JubjubEngine>(
 // Commits to a polynomial using the input group elements
 // panics if the number of group elements does not equal the number of polynomial coefficients
 pub fn commit<E: JubjubEngine>(
-  group_elements: &[Point<E, PrimeOrder>],
+  group_elements: &[Point<E, Unknown>],
   polynomial: &[E::Fr],
   jubjub_params: &E::Params,
-) -> anyhow::Result<Point<E, PrimeOrder>> {
+) -> anyhow::Result<Point<E, Unknown>> {
   if group_elements.len() != polynomial.len() {
     let error = format!(
       "diff sizes, {} != {}",

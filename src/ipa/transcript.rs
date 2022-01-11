@@ -1,49 +1,88 @@
-use ff::PrimeField;
+use ff_utils::bn256_fr::Bn256Fr;
+use franklin_crypto::bellman::pairing::bn256::Fr;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
 
-pub trait Transcript<F: PrimeField>: Sized + Clone {
-  fn new(init_state: &F) -> Self;
-  fn commit_field_element(&mut self, element: &F) -> anyhow::Result<()>;
-  fn get_challenge(&mut self) -> F;
+pub trait Bn256Transcript: Sized + Clone {
+  type Params;
+
+  fn new(init_state: &Fr) -> Self;
+  fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()>;
+  fn get_challenge(&mut self) -> Fr;
 }
 
 #[derive(Clone)]
-pub struct PoseidonTranscript<F>
-where
-  F: PrimeField,
-{
+pub struct PoseidonBn256Transcript {
   // blake_2s_state: Blake2sTranscript<E::Fr>,
-  state: F,
+  state: Bn256Fr,
   // _marker: PhantomData<CS>,
 }
 
-impl<F: PrimeField> Transcript<F> for PoseidonTranscript<F> {
-  fn new(init_state: &F) -> Self {
+impl Bn256Transcript for PoseidonBn256Transcript {
+  type Params = Fr;
+
+  fn new(init_state: &Self::Params) -> Self {
     // let blake_2s_state = Blake2sTranscript::new();
 
     Self {
       // blake_2s_state,
-      state: init_state.clone(),
+      state: convert_ff_ce_to_ff(init_state.clone()).unwrap(),
       // _marker: std::marker::PhantomData,
     }
   }
 
-  fn commit_field_element(&mut self, element: &F) -> anyhow::Result<()> {
-    let mut preimage = vec![F::zero(); 2];
+  fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()> {
+    let mut preimage = vec![<Bn256Fr as ff::Field>::zero(); 2];
     let constants = PoseidonConstants::new();
     preimage[0] = self.state;
-    preimage[1] = element.clone();
+    preimage[1] = convert_ff_ce_to_ff(element.clone()).unwrap();
 
-    let mut h = Poseidon::<F, typenum::U2>::new_with_preimage(&preimage, &constants);
+    let mut h = Poseidon::<Bn256Fr, typenum::U2>::new_with_preimage(&preimage, &constants);
     self.state = h.hash();
 
     Ok(())
   }
 
-  fn get_challenge(&mut self) -> F {
-    let challenge = self.state.clone();
+  fn get_challenge(&mut self) -> Fr {
+    let challenge = convert_ff_to_ff_ce(self.state.clone()).unwrap();
 
     challenge
   }
+}
+
+// uncheck overflow
+pub fn from_bytes_le<F: ff::PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
+  let mut value = F::zero();
+  let mut factor = F::one();
+  for b in bytes {
+    value += factor * F::from(*b as u64);
+    factor *= F::from(256u64);
+  }
+
+  Ok(value)
+}
+
+pub fn to_bytes_le<F: ff::PrimeField>(scalar: &F) -> Vec<u8> {
+  let mut result = vec![];
+  for (bytes, tmp) in scalar
+    .to_repr()
+    .as_ref()
+    .iter()
+    .map(|x| x.to_le_bytes())
+    .zip(result.chunks_mut(8))
+  {
+    for i in 0..bytes.len() {
+      tmp[i] = bytes[i];
+    }
+  }
+
+  result
+}
+
+pub fn convert_ff_to_ff_ce(value: Bn256Fr) -> anyhow::Result<Fr> {
+  super::utils::from_bytes_le(&to_bytes_le(&value))
+}
+
+pub fn convert_ff_ce_to_ff(value: Fr) -> anyhow::Result<Bn256Fr> {
+  from_bytes_le(&super::utils::to_bytes_le(&value))
 }
