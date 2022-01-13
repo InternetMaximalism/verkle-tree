@@ -2,9 +2,7 @@ use std::io::{Error, ErrorKind};
 
 // use ff_utils::{Bn256Fr, FromBytes, ToBytes};
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::{
-  FixedGenerators, JubjubEngine, JubjubParams, PrimeOrder, Unknown,
-};
+use franklin_crypto::babyjubjub::{FixedGenerators, JubjubEngine, JubjubParams, Unknown};
 use franklin_crypto::bellman::{PrimeField, PrimeFieldRepr};
 
 pub fn from_bytes_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
@@ -56,12 +54,12 @@ pub fn fold_scalars<F: PrimeField>(a: &[F], b: &[F], x: &F) -> anyhow::Result<Ve
 // Computes c[i] = a[i] + b[i] * x
 // returns c
 // panics if len(a) != len(b)
-pub fn fold_points<E: JubjubEngine>(
-  a: &[Point<E, PrimeOrder>],
-  b: &[Point<E, PrimeOrder>],
+pub fn fold_points<E: JubjubEngine, Subgroup>(
+  a: &[Point<E, Subgroup>],
+  b: &[Point<E, Subgroup>],
   x: &E::Fs,
   jubjub_params: &E::Params,
-) -> anyhow::Result<Vec<Point<E, PrimeOrder>>> {
+) -> anyhow::Result<Vec<Point<E, Subgroup>>> {
   if a.len() != b.len() {
     return Err(Error::new(ErrorKind::InvalidData, "slices not equal length").into());
   }

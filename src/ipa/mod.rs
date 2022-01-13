@@ -10,7 +10,7 @@ use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
 use franklin_crypto::bellman::{Field, PrimeField};
 
-use crate::ipa::config::{compute_barycentric_coefficients, IpaConfig};
+use crate::ipa::config::IpaConfig;
 use crate::ipa::proof::generate_challenges;
 use crate::ipa::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa::utils::{commit, fold_points, fold_scalars, fr_to_fs};
@@ -18,7 +18,15 @@ use crate::ipa::utils::{commit, fold_points, fold_scalars, fr_to_fs};
 use self::proof::IpaProof;
 
 pub trait Ipa<E: JubjubEngine> {
-  fn check_ipa_proof(
+  fn create_proof(
+    transcript_params: E::Fr,
+    ipa_conf: IpaConfig<E>,
+    commitment: Point<E, Unknown>,
+    a: &[E::Fr],
+    eval_point: E::Fr,
+  ) -> IpaProof<E::Fr>;
+
+  fn check_proof(
     commitment: Point<E, Unknown>,
     proof: IpaProof<E::Fr>,
     eval_point: E::Fr,
@@ -31,7 +39,17 @@ pub trait Ipa<E: JubjubEngine> {
 pub struct Bn256Ipa;
 
 impl Ipa<Bn256> for Bn256Ipa {
-  fn check_ipa_proof(
+  fn create_proof(
+    _transcript_params: Fr,
+    _ipa_conf: IpaConfig<Bn256>,
+    _commitment: Point<Bn256, Unknown>,
+    _a: &[Fr],
+    _eval_point: Fr,
+  ) -> IpaProof<Fr> {
+    unimplemented!();
+  }
+
+  fn check_proof(
     commitment: Point<Bn256, Unknown>,
     proof: IpaProof<Fr>,
     eval_point: Fr,
@@ -59,7 +77,9 @@ impl Ipa<Bn256> for Bn256Ipa {
     }
 
     // let bit_limit = None; // Some(256usize);
-    let mut b = compute_barycentric_coefficients(&ipa_conf.precomputed_weights, &eval_point)?;
+    let mut b = ipa_conf
+      .precomputed_weights
+      .compute_barycentric_coefficients(&eval_point)?;
 
     if b.len() != ipa_conf.srs.len() {
       return Err(
@@ -136,7 +156,7 @@ impl Ipa<Bn256> for Bn256Ipa {
       let b_r = b_chunks.next().unwrap().to_vec();
 
       b = fold_scalars::<Fr>(&b_l, &b_r, x_inv)?;
-      current_basis = fold_points::<Bn256>(&g_l, &g_r, &fr_to_fs::<Bn256>(x_inv)?, &jubjub_params)?;
+      current_basis = fold_points(&g_l, &g_r, &fr_to_fs::<Bn256>(x_inv)?, &jubjub_params)?;
     }
 
     println!("x_inv: {}/{}", challenges_inv.len(), challenges_inv.len());

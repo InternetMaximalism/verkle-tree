@@ -1,7 +1,11 @@
 use ff_utils::bn256_fr::Bn256Fr;
-use franklin_crypto::bellman::pairing::bn256::Fr;
+use franklin_crypto::babyjubjub::edwards::Point;
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
+use franklin_crypto::bellman::PrimeField;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
+
+use crate::batch_proof::read_point_le;
 
 pub trait Bn256Transcript: Sized + Clone {
   type Params;
@@ -47,6 +51,28 @@ impl Bn256Transcript for PoseidonBn256Transcript {
     let challenge = convert_ff_to_ff_ce(self.state.clone()).unwrap();
 
     challenge
+  }
+}
+
+impl PoseidonBn256Transcript {
+  pub fn commit_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
+    let chunk_size = (Fr::NUM_BITS / 8) as usize;
+    assert!(chunk_size != 0);
+    for b in bytes.chunks(chunk_size) {
+      let mut reader = std::io::Cursor::new(b.to_vec());
+      let element = read_point_le::<Fr>(&mut reader).unwrap();
+      self.commit_field_element(&element)?;
+    }
+
+    Ok(())
+  }
+
+  pub fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()> {
+    let (point_x, point_y) = point.into_xy();
+    self.commit_field_element(&point_x)?;
+    self.commit_field_element(&point_y)?;
+
+    Ok(())
   }
 }
 
