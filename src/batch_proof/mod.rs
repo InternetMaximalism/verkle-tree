@@ -1,58 +1,57 @@
 use franklin_crypto::babyjubjub::edwards::Point;
+use franklin_crypto::babyjubjub::fs::Fs;
 use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
-use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
+use franklin_crypto::bellman::pairing::bn256::Bn256;
+use franklin_crypto::bellman::{Field, PrimeField};
 
 use crate::ipa::config::{IpaConfig, DOMAIN_SIZE};
 use crate::ipa::proof::IpaProof;
 use crate::ipa::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-use crate::ipa::utils::fr_to_fs;
+use crate::ipa::utils::read_point_le;
 use crate::ipa::{Bn256Ipa, Ipa};
 
 #[derive(Clone)]
 pub struct MultiProof<E: JubjubEngine> {
-  ipa: IpaProof<E::Fr>,
+  ipa: IpaProof<E>,
   d: Point<E, Unknown>,
 }
 
-pub fn read_point_le<F: PrimeField>(reader: &mut std::io::Cursor<Vec<u8>>) -> anyhow::Result<F> {
-  let mut raw_value = F::Repr::default();
-  raw_value.read_le(reader)?;
-  let result = F::from_repr(raw_value)?;
-
-  Ok(result)
-}
-
-trait BatchProof<E: JubjubEngine> {
+trait BatchProof<E: JubjubEngine, T: Bn256Transcript> {
   fn create_proof(
-    transcript_params: Fr,
-    ipa_conf: IpaConfig<Bn256>,
     commitments: &[Point<Bn256, Unknown>],
-    fs: &[Vec<Fr>],
+    fs: &[Vec<Fs>],
     zs: &[u8],
+    transcript_params: T::Params,
+    ipa_conf: &IpaConfig<Bn256>,
     jubjub_params: &E::Params,
   ) -> anyhow::Result<MultiProof<E>>;
 
   fn check_proof(
-    transcript_params: E::Fr,
-    ipa_conf: IpaConfig<E>,
     proof: MultiProof<E>,
     commitments: Vec<Point<E, Unknown>>,
-    ys: Vec<E::Fr>,
+    ys: Vec<E::Fs>,
     zs: Vec<u8>,
+    transcript_params: T::Params,
+    ipa_conf: &IpaConfig<E>,
     jubjub_params: &E::Params,
   ) -> anyhow::Result<bool>;
 }
 
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn test_multi_proof() {}
+}
+
 pub struct Bn256BatchProof;
 
-impl BatchProof<Bn256> for Bn256BatchProof {
+impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
   fn create_proof(
-    transcript_params: Fr,
-    ipa_conf: IpaConfig<Bn256>,
     commitments: &[Point<Bn256, Unknown>],
-    fs: &[Vec<Fr>],
+    fs: &[Vec<Fs>],
     zs: &[u8],
+    transcript_params: Fs,
+    ipa_conf: &IpaConfig<Bn256>,
     jubjub_params: &<Bn256 as JubjubEngine>::Params,
   ) -> anyhow::Result<MultiProof<Bn256>> {
     let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
@@ -97,9 +96,9 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     let r = transcript.get_challenge(); // r
 
     // Compute g(X)
-    let mut g_x = vec![Fr::zero(); DOMAIN_SIZE];
+    let mut g_x = vec![Fs::zero(); DOMAIN_SIZE];
 
-    let mut powers_of_r = Fr::one(); // powers_of_r = 1
+    let mut powers_of_r = Fs::one(); // powers_of_r = 1
     for i in 0..num_queries {
       let quotient = ipa_conf
         .precomputed_weights
@@ -121,12 +120,11 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     let t = transcript.get_challenge(); // t
 
     // Compute h(X) = g_1(X)
-    let mut h_x = vec![Fr::zero(); DOMAIN_SIZE];
+    let mut h_x = vec![Fs::zero(); DOMAIN_SIZE];
 
-    let mut powers_of_r = Fr::one(); // powers_of_r = 1
+    let mut powers_of_r = Fs::one(); // powers_of_r = 1
     for i in 0..num_queries {
-      let mut reader = std::io::Cursor::new(vec![zs[i]]);
-      let z_i = read_point_le::<Fr>(&mut reader).unwrap();
+      let z_i = read_point_le::<Fs>(&vec![zs[i]]).unwrap();
       let mut den_inv = t.clone();
       den_inv.sub_assign(&z_i);
       den_inv.inverse();
@@ -143,7 +141,7 @@ impl BatchProof<Bn256> for Bn256BatchProof {
       powers_of_r.mul_assign(&r); // powers_of_r *= r
     }
 
-    let mut h_minus_g = vec![Fr::zero(); DOMAIN_SIZE];
+    let mut h_minus_g = vec![Fs::zero(); DOMAIN_SIZE];
     for i in 0..DOMAIN_SIZE {
       h_minus_g[i] = h_x[i].clone();
       h_minus_g[i].sub_assign(&g_x[i]);
@@ -156,18 +154,25 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     let e_minus_d = e.add(&minus_d, jubjub_params);
 
     let transcript_params = transcript.get_challenge();
-    let ipa_proof = Bn256Ipa::create_proof(transcript_params, ipa_conf, e_minus_d, &h_minus_g, t);
+    let ipa_proof = Bn256Ipa::create_proof(
+      e_minus_d,
+      &h_minus_g,
+      t,
+      transcript_params,
+      ipa_conf,
+      jubjub_params,
+    )?;
 
     Ok(MultiProof { ipa: ipa_proof, d })
   }
 
   fn check_proof(
-    transcript_params: Fr,
-    ipa_conf: IpaConfig<Bn256>,
     proof: MultiProof<Bn256>,
     commitments: Vec<Point<Bn256, Unknown>>,
-    ys: Vec<Fr>,
+    ys: Vec<Fs>,
     zs: Vec<u8>,
+    transcript_params: Fs,
+    ipa_conf: &IpaConfig<Bn256>,
     jubjub_params: &<Bn256 as JubjubEngine>::Params,
   ) -> anyhow::Result<bool> {
     let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
@@ -204,11 +209,11 @@ impl BatchProof<Bn256> for Bn256BatchProof {
       transcript.commit_field_element(&ys[i])?;
     }
 
-    let r: Fr = transcript.get_challenge();
+    let r = transcript.get_challenge();
 
     transcript.commit_point(&proof.d)?;
 
-    let t: Fr = transcript.get_challenge();
+    let t = transcript.get_challenge();
 
     // Compute helper_scalars. This is r^i / t - z_i
     //
@@ -216,12 +221,11 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     // this is more readable, so will leave for now
     let mut minus_one = <Bn256 as JubjubEngine>::Fs::one();
     minus_one.negate(); // minus_one = -1
-    let mut helper_scalars: Vec<Fr> = Vec::with_capacity(num_queries);
-    let mut powers_of_r = Fr::one(); // powers_of_r = 1
+    let mut helper_scalars: Vec<Fs> = Vec::with_capacity(num_queries);
+    let mut powers_of_r = Fs::one(); // powers_of_r = 1
     for i in 0..num_queries {
       // helper_scalars[i] = r^i / (t - z_i)
-      let mut reader = std::io::Cursor::new(vec![zs[i]]);
-      let z_i = read_point_le::<Fr>(&mut reader).unwrap();
+      let z_i = read_point_le::<Fs>(&vec![zs[i]]).unwrap();
       let mut t_minus_z_i = t;
       t_minus_z_i.sub_assign(&z_i); // t - z_i
       let mut helper_scalars_i = t_minus_z_i.pow(minus_one.into_repr()); // 1 / (t - z_i)
@@ -233,7 +237,7 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     }
 
     // Compute g_2(t) = SUM y_i * (r^i / t - z_i) = SUM y_i * helper_scalars
-    let mut g_2_t = Fr::zero();
+    let mut g_2_t = Fs::zero();
     for i in 0..num_queries {
       let mut tmp = ys[i];
       tmp.mul_assign(&helper_scalars[i]);
@@ -243,7 +247,7 @@ impl BatchProof<Bn256> for Bn256BatchProof {
     // Compute E = \sum_{i = 0}^{num_queries - 1} C_i * (r^i / t - z_i)
     let mut e = Point::zero();
     for (i, c_i) in commitments.iter().enumerate() {
-      let tmp = c_i.mul(fr_to_fs::<Bn256>(&helper_scalars[i])?, &jubjub_params); // c_i * helper_scalars_i
+      let tmp = c_i.mul(helper_scalars[i], &jubjub_params); // c_i * helper_scalars_i
       e = e.add(&tmp, &jubjub_params); // e += c_i * helper_scalars_i
     }
 
@@ -258,9 +262,9 @@ impl BatchProof<Bn256> for Bn256BatchProof {
       proof.ipa,
       t,
       g_2_t,
+      transcript_params,
       ipa_conf,
       jubjub_params,
-      transcript_params,
     )
   }
 }

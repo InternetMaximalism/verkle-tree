@@ -7,68 +7,16 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in library 'verkle-circuit'",
+      "name": "Debug `test_ipa_proof_create_verify` in library 'verkle-tree'",
       "cargo": {
-        "args": ["test", "--no-run", "--lib", "--package=verkle-circuit"],
+        "args": ["test", "--no-run", "--lib", "--package=verkle-tree"],
         "filter": {
-          "name": "verkle-circuit",
+          "name": "verkle-tree",
           "kind": "lib"
         }
       },
-      "args": [],
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug executable 'verkle-circuit'",
-      "cargo": {
-        "args": ["build", "--bin=verkle-circuit", "--package=verkle-circuit"],
-        "filter": {
-          "name": "verkle-circuit",
-          "kind": "bin"
-        }
-      },
-      "args": [],
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug unit tests in executable 'verkle-circuit'",
-      "cargo": {
-        "args": [
-          "test",
-          "--no-run",
-          "--bin=verkle-circuit",
-          "--package=verkle-circuit"
-        ],
-        "filter": {
-          "name": "verkle-circuit",
-          "kind": "bin"
-        }
-      },
-      "args": [],
+      "args": ["test_ipa_proof_create_verify"],
       "cwd": "${workspaceFolder}"
     }
-    // {
-    //   "type": "lldb",
-    //   "request": "launch",
-    //   "name": "Debug unit tests in executable 'test_discrete_log_circuit'",
-    //   "cargo": {
-    //     "args": [
-    //       "test",
-    //       "--no-run",
-    //       "--bin=verkle-circuit",
-    //       "--package=verkle-circuit"
-    //     ],
-    //     "filter": {
-    //       "name": "verkle-circuit",
-    //       "kind": "bin"
-    //     }
-    //   },
-    //   "args": ["test_ipa_circuit"],
-    //   "cwd": "${workspaceFolder}"
-    // }
   ]
 }

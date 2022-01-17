@@ -1,40 +1,113 @@
 use franklin_crypto::babyjubjub::{edwards::Point, JubjubEngine, Unknown};
+use franklin_crypto::babyjubjub::{FixedGenerators, JubjubParams};
 use franklin_crypto::bellman::{Field, PrimeField};
 
-use super::utils::{commit, from_bytes_le};
+use super::utils::{commit, generate_random_points, log2_ceil, read_point_le};
 
 pub const NUM_IPA_ROUNDS: usize = 1; // log_2(common.POLY_DEGREE);
 pub const DOMAIN_SIZE: usize = 2; // common.POLY_DEGREE;
 
+// computes A'(x_j) where x_j must be an element in the domain
+// This is computed as the product of x_j - x_i where x_i is an element in the domain
+// and x_i is not equal to x_j
+pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> F {
+  // let domain_element_fr = Fr::from(domain_element as u128);
+  if element > DOMAIN_SIZE {
+    panic!(
+      "the domain is [0, {}], {} is not in the domain",
+      DOMAIN_SIZE - 1,
+      element
+    );
+  }
+
+  let domain_element_fr = read_point_le::<F>(&element.to_le_bytes()).unwrap();
+
+  let mut total = F::one();
+
+  for i in 0..DOMAIN_SIZE {
+    if i == element {
+      continue;
+    }
+
+    let i_fr = read_point_le::<F>(&i.to_le_bytes()).unwrap();
+
+    let mut tmp = domain_element_fr.clone();
+    tmp.sub_assign(&i_fr);
+    total.mul_assign(&tmp);
+  }
+
+  total
+}
+
 #[derive(Clone, Debug)]
 pub struct PrecomputedWeights<E: JubjubEngine> {
   // This stores A'(x_i) and 1/A'(x_i)
-  pub barycentric_weights: Vec<E::Fr>,
+  pub barycentric_weights: Vec<E::Fs>,
   // This stores 1/k and -1/k for k \in [0, 255]
-  pub inverted_domain: Vec<E::Fr>,
+  pub inverted_domain: Vec<E::Fs>,
 }
 
 impl<E: JubjubEngine> PrecomputedWeights<E> {
+  pub fn new() -> Self {
+    // Imagine we have two arrays of the same length and we concatenate them together
+    // This is how we will store the A'(x_i) and 1/A'(x_i)
+    // This midpoint variable is used to compute the offset that we need
+    // to place 1/A'(x_i)
+    let midpoint = DOMAIN_SIZE;
+
+    // Note there are DOMAIN_SIZE number of weights, but we are also storing their inverses
+    // so we need double the amount of space
+    let mut barycentric_weights = vec![E::Fs::zero(); midpoint * 2];
+    for i in 0..midpoint {
+      let weight: E::Fs = compute_barycentric_weight_for_element(i);
+
+      let inv_weight = weight.inverse().unwrap();
+
+      barycentric_weights[i] = weight;
+      barycentric_weights[i + midpoint] = inv_weight;
+    }
+
+    // Computing 1/k and -1/k for k \in [0, 255]
+    // Note that since we cannot do 1/0, we have one less element
+    let midpoint = DOMAIN_SIZE - 1;
+    let mut inverted_domain = vec![E::Fs::zero(); midpoint * 2];
+    for i in 1..DOMAIN_SIZE {
+      let k = read_point_le::<E::Fs>(&i.to_le_bytes()).unwrap();
+      let k = k.inverse().unwrap();
+
+      let mut negative_k = E::Fs::zero();
+      negative_k.sub_assign(&k);
+
+      inverted_domain[i - 1] = k;
+      inverted_domain[(i - 1) + midpoint] = negative_k;
+    }
+
+    Self {
+      barycentric_weights,
+      inverted_domain,
+    }
+  }
+
   // Computes the coefficients `barycentric_coeffs` for a point `z` such that
   // when we have a polynomial `p` in lagrange basis, the inner product of `p` and `barycentric_coeffs`
   // is equal to p(z)
   // Note that `z` should not be in the domain
   // This can also be seen as the lagrange coefficients L_i(point)
-  pub fn compute_barycentric_coefficients(&self, point: &E::Fr) -> anyhow::Result<Vec<E::Fr>> {
+  pub fn compute_barycentric_coefficients(&self, point: &E::Fs) -> anyhow::Result<Vec<E::Fs>> {
     // Compute A(x_i) * point - x_i
-    let mut lagrange_evals: Vec<E::Fr> = Vec::with_capacity(DOMAIN_SIZE);
+    let mut lagrange_evals: Vec<E::Fs> = Vec::with_capacity(DOMAIN_SIZE);
     for i in 0..DOMAIN_SIZE {
       let weight = self.barycentric_weights[i];
-      let wrapped_i = from_bytes_le(&i.to_le_bytes()).unwrap();
+      let wrapped_i = read_point_le(&i.to_le_bytes()).unwrap();
       let mut eval = point.clone();
       eval.sub_assign(&wrapped_i);
       eval.mul_assign(&weight);
-      lagrange_evals.push(eval);
+      lagrange_evals.push(eval); // Fs
     }
 
-    let mut total_prod = E::Fr::one();
+    let mut total_prod = E::Fs::one();
     for i in 0..DOMAIN_SIZE {
-      let i_fr: E::Fr = from_bytes_le(&i.to_le_bytes())?;
+      let i_fr: E::Fs = read_point_le(&i.to_le_bytes())?;
       let mut tmp = point.clone();
       tmp.sub_assign(&i_fr);
       total_prod.mul_assign(&tmp);
@@ -51,7 +124,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     Ok(lagrange_evals)
   }
 
-  pub fn get_inverted_element(&self, element: usize, is_neg: bool) -> E::Fr {
+  pub fn get_inverted_element(&self, element: usize, is_neg: bool) -> E::Fs {
     assert!(element != 0, "cannot compute the inverse of zero");
     let mut index = element - 1;
 
@@ -63,7 +136,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     return self.inverted_domain[index];
   }
 
-  pub fn get_ratio_of_weights(&self, numerator: usize, denominator: usize) -> E::Fr {
+  pub fn get_ratio_of_weights(&self, numerator: usize, denominator: usize) -> E::Fs {
     let a = self.barycentric_weights[numerator];
     let midpoint = self.barycentric_weights.len() / 2;
     let b = self.barycentric_weights[denominator + midpoint];
@@ -73,8 +146,8 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     result
   }
 
-  pub fn divide_on_domain(&self, index: usize, f: &[E::Fr]) -> Vec<E::Fr> {
-    let mut quotient = vec![E::Fr::zero(); DOMAIN_SIZE];
+  pub fn divide_on_domain(&self, index: usize, f: &[E::Fs]) -> Vec<E::Fs> {
+    let mut quotient = vec![E::Fs::zero(); DOMAIN_SIZE];
 
     let y = f[index];
 
@@ -119,9 +192,27 @@ pub struct IpaConfig<E: JubjubEngine> {
 }
 
 impl<E: JubjubEngine> IpaConfig<E> {
+  pub fn new(jubjub_params: &E::Params) -> Self {
+    let srs = generate_random_points(DOMAIN_SIZE, jubjub_params).unwrap();
+    let q = Point::<E, Unknown>::from(
+      jubjub_params
+        .generator(FixedGenerators::ProofGenerationKey)
+        .clone(),
+    );
+    let precomputed_weights = PrecomputedWeights::new();
+    let num_ipa_rounds = log2_ceil(DOMAIN_SIZE);
+
+    Self {
+      srs,
+      q,
+      precomputed_weights,
+      num_ipa_rounds,
+    }
+  }
+
   pub fn commit(
     &self,
-    polynomial: &[E::Fr],
+    polynomial: &[E::Fs],
     jubjub_params: &E::Params,
   ) -> anyhow::Result<Point<E, Unknown>> {
     commit(&self.srs, polynomial, jubjub_params)

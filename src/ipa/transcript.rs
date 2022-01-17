@@ -1,29 +1,30 @@
-use ff_utils::bn256_fr::Bn256Fr;
+use ff_utils::bn256_fs::Bn256Fs;
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
+use franklin_crypto::babyjubjub::fs::Fs;
+use franklin_crypto::bellman::pairing::bn256::Bn256;
 use franklin_crypto::bellman::PrimeField;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
 
-use crate::batch_proof::read_point_le;
+use super::utils::{read_point_le, write_point_le};
 
 pub trait Bn256Transcript: Sized + Clone {
   type Params;
 
-  fn new(init_state: &Fr) -> Self;
-  fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()>;
-  fn get_challenge(&mut self) -> Fr;
+  fn new(init_state: &Fs) -> Self;
+  fn commit_field_element(&mut self, element: &Fs) -> anyhow::Result<()>;
+  fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()>;
+  fn into_params(self) -> Self::Params;
+  fn get_challenge(&self) -> Fs;
 }
 
 #[derive(Clone)]
 pub struct PoseidonBn256Transcript {
-  // blake_2s_state: Blake2sTranscript<E::Fr>,
-  state: Bn256Fr,
-  // _marker: PhantomData<CS>,
+  pub state: Bn256Fs,
 }
 
 impl Bn256Transcript for PoseidonBn256Transcript {
-  type Params = Fr;
+  type Params = Fs;
 
   fn new(init_state: &Self::Params) -> Self {
     // let blake_2s_state = Blake2sTranscript::new();
@@ -35,19 +36,36 @@ impl Bn256Transcript for PoseidonBn256Transcript {
     }
   }
 
-  fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()> {
-    let mut preimage = vec![<Bn256Fr as ff::Field>::zero(); 2];
+  fn commit_field_element(&mut self, element: &Fs) -> anyhow::Result<()> {
+    let mut preimage = vec![<Bn256Fs as ff::Field>::zero(); 2];
     let constants = PoseidonConstants::new();
     preimage[0] = self.state;
     preimage[1] = convert_ff_ce_to_ff(element.clone()).unwrap();
 
-    let mut h = Poseidon::<Bn256Fr, typenum::U2>::new_with_preimage(&preimage, &constants);
+    let mut h = Poseidon::<Bn256Fs, typenum::U2>::new_with_preimage(&preimage, &constants);
     self.state = h.hash();
 
     Ok(())
   }
 
-  fn get_challenge(&mut self) -> Fr {
+  fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()> {
+    let (point_x, point_y) = point.into_xy();
+    let mut point_bytes = write_point_le(&point_x);
+    let mut point_y_bytes = write_point_le(&point_y);
+    println!("{:?}", point_bytes);
+    println!("{:?}", point_y_bytes);
+    point_bytes.append(&mut point_y_bytes);
+    println!("{:?}", point_bytes);
+    self.commit_bytes(&point_bytes)?;
+
+    Ok(())
+  }
+
+  fn into_params(self) -> Self::Params {
+    convert_ff_to_ff_ce(self.state).unwrap()
+  }
+
+  fn get_challenge(&self) -> Fs {
     let challenge = convert_ff_to_ff_ce(self.state.clone()).unwrap();
 
     challenge
@@ -55,22 +73,24 @@ impl Bn256Transcript for PoseidonBn256Transcript {
 }
 
 impl PoseidonBn256Transcript {
-  pub fn commit_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
-    let chunk_size = (Fr::NUM_BITS / 8) as usize;
+  pub fn with_bytes(bytes: &[u8]) -> Self {
+    let chunk_size = (Fs::NUM_BITS / 8) as usize;
     assert!(chunk_size != 0);
-    for b in bytes.chunks(chunk_size) {
-      let mut reader = std::io::Cursor::new(b.to_vec());
-      let element = read_point_le::<Fr>(&mut reader).unwrap();
-      self.commit_field_element(&element)?;
-    }
+    assert!(bytes.len() <= chunk_size);
+    let element = read_point_le::<Fs>(&bytes).unwrap();
 
-    Ok(())
+    Self {
+      state: convert_ff_ce_to_ff(element.clone()).unwrap(),
+    }
   }
 
-  pub fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()> {
-    let (point_x, point_y) = point.into_xy();
-    self.commit_field_element(&point_x)?;
-    self.commit_field_element(&point_y)?;
+  pub fn commit_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
+    let chunk_size = (Fs::NUM_BITS / 8) as usize;
+    assert!(chunk_size != 0);
+    for b in bytes.chunks(chunk_size) {
+      let element = read_point_le::<Fs>(&b).unwrap();
+      self.commit_field_element(&element)?;
+    }
 
     Ok(())
   }
@@ -89,26 +109,29 @@ pub fn from_bytes_le<F: ff::PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
 }
 
 pub fn to_bytes_le<F: ff::PrimeField>(scalar: &F) -> Vec<u8> {
-  let mut result = vec![];
-  for (bytes, tmp) in scalar
-    .to_repr()
-    .as_ref()
-    .iter()
-    .map(|x| x.to_le_bytes())
-    .zip(result.chunks_mut(8))
-  {
-    for i in 0..bytes.len() {
-      tmp[i] = bytes[i];
-    }
-  }
-
-  result
+  scalar.to_repr().as_ref().to_vec()
 }
 
-pub fn convert_ff_to_ff_ce(value: Bn256Fr) -> anyhow::Result<Fr> {
-  super::utils::from_bytes_le(&to_bytes_le(&value))
+#[test]
+fn test_read_write_ff_ce() {
+  let bytes = [
+    101u8, 121, 238, 208, 145, 118, 73, 126, 4, 129, 129, 133, 67, 167, 1, 64, 164, 189, 107, 239,
+    228, 126, 238, 70, 205, 50, 174, 80, 238, 181, 137, 47,
+  ];
+  let point = from_bytes_le::<Bn256Fs>(&bytes).unwrap();
+  assert_eq!(
+    format!("{:?}", point),
+    "Bn256Fs(0x2f89b5ee50ae32cd46ee7ee4ef6bbda44001a743858181047e497691d0ee7965)"
+  );
+
+  let recovered_bytes = to_bytes_le(&point);
+  assert_eq!(recovered_bytes, bytes);
 }
 
-pub fn convert_ff_ce_to_ff(value: Fr) -> anyhow::Result<Bn256Fr> {
-  from_bytes_le(&super::utils::to_bytes_le(&value))
+pub fn convert_ff_to_ff_ce(value: Bn256Fs) -> anyhow::Result<Fs> {
+  read_point_le::<Fs>(&to_bytes_le(&value))
+}
+
+pub fn convert_ff_ce_to_ff(value: Fs) -> anyhow::Result<Bn256Fs> {
+  from_bytes_le(&super::utils::write_point_le(&value))
 }
