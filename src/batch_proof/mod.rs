@@ -228,7 +228,9 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
       let z_i = read_point_le::<Fs>(&vec![zs[i]]).unwrap();
       let mut t_minus_z_i = t;
       t_minus_z_i.sub_assign(&z_i); // t - z_i
-      let mut helper_scalars_i = t_minus_z_i.pow(minus_one.into_repr()); // 1 / (t - z_i)
+      let mut helper_scalars_i = t_minus_z_i
+        .inverse()
+        .ok_or(anyhow::anyhow!("cannot find inverse of `t_minus_z_i`"))?; // 1 / (t - z_i)
       helper_scalars_i.mul_assign(&powers_of_r); // r^i / (t - z_i)
       helper_scalars.push(helper_scalars_i);
 

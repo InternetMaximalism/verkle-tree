@@ -52,10 +52,7 @@ impl Bn256Transcript for PoseidonBn256Transcript {
     let (point_x, point_y) = point.into_xy();
     let mut point_bytes = write_point_le(&point_x);
     let mut point_y_bytes = write_point_le(&point_y);
-    println!("{:?}", point_bytes);
-    println!("{:?}", point_y_bytes);
     point_bytes.append(&mut point_y_bytes);
-    println!("{:?}", point_bytes);
     self.commit_bytes(&point_bytes)?;
 
     Ok(())

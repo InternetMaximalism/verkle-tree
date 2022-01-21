@@ -54,8 +54,6 @@ pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
   let mut repr = F::Repr::default();
   let mut padded_bytes = bytes.to_vec();
   let num_bits = F::NUM_BITS as usize;
-  println!("bytes: {:?}", bytes);
-  println!("num_bits: {}", num_bits);
   for _ in bytes.len()..num_bits {
     padded_bytes.push(0);
   }
@@ -253,11 +251,7 @@ pub fn multi_scalar<E: JubjubEngine>(
     );
   }
 
-  let mut result = Point::<E, Unknown>::from(
-    jubjub_params
-      .generator(FixedGenerators::ProofGenerationKey)
-      .clone(),
-  );
+  let mut result = Point::<E, Unknown>::zero();
   for i in 0..points.len() {
     let mut tmp = points[i].clone();
     tmp = tmp.mul(scalars[i], jubjub_params); // tmp = points[i] * scalars[i]

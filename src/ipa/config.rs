@@ -4,8 +4,8 @@ use franklin_crypto::bellman::{Field, PrimeField};
 
 use super::utils::{commit, generate_random_points, log2_ceil, read_point_le};
 
-pub const NUM_IPA_ROUNDS: usize = 1; // log_2(common.POLY_DEGREE);
-pub const DOMAIN_SIZE: usize = 2; // common.POLY_DEGREE;
+pub const NUM_IPA_ROUNDS: usize = 8; // log_2(common.POLY_DEGREE);
+pub const DOMAIN_SIZE: usize = 256; // common.POLY_DEGREE;
 
 // computes A'(x_j) where x_j must be an element in the domain
 // This is computed as the product of x_j - x_i where x_i is an element in the domain

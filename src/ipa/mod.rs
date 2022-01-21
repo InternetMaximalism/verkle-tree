@@ -7,7 +7,7 @@ use franklin_crypto::babyjubjub::edwards::Point;
 use franklin_crypto::babyjubjub::fs::Fs;
 use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::pairing::bn256::Bn256;
-use franklin_crypto::bellman::{Field, PrimeField};
+use franklin_crypto::bellman::Field;
 
 use crate::ipa::config::IpaConfig;
 use crate::ipa::proof::generate_challenges;
@@ -79,7 +79,7 @@ mod tests {
     let ipa_conf = &IpaConfig::<Bn256>::new(jubjub_params);
 
     // Prover view
-    let poly = test_poly::<Fs>(&[1, 2]);
+    let poly = test_poly::<Fs>(&[12, 97, 37, 0, 1, 208, 132, 3]);
     let prover_commitment = ipa_conf.commit(&poly, jubjub_params).unwrap();
 
     let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
@@ -132,8 +132,10 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     jubjub_params: &<Bn256 as JubjubEngine>::Params,
   ) -> anyhow::Result<IpaProof<Bn256>> {
     let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
-
-    // transcript.commit_bytes(b"ipa")?;
+    let mut current_basis = ipa_conf.srs.clone();
+    println!("commitment: {:?}", commitment.into_xy());
+    // let _commitment = commit(&current_basis.clone(), a, jubjub_params)?;
+    // assert!(commitment.eq(&_commitment));
 
     let mut a = a.to_vec();
     let mut b = ipa_conf
@@ -151,11 +153,10 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     transcript.commit_field_element(&ip)?; // output point
     let w = transcript.get_challenge(); // w
 
-    let q = ipa_conf.q.mul(w.clone(), jubjub_params);
+    let q = ipa_conf.q.clone();
+    let qw = q.clone().mul(w.clone(), jubjub_params);
 
     let num_rounds = ipa_conf.num_ipa_rounds;
-
-    let mut current_basis = ipa_conf.srs.clone();
 
     let mut ls = Vec::with_capacity(num_rounds);
     let mut rs = Vec::with_capacity(num_rounds);
@@ -177,22 +178,24 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
       let z_r = inner_prod(&a_l, &b_r)?;
 
       let c_l_1 = commit(g_l, a_r, jubjub_params)?;
-      let c_l = commit(&[c_l_1, q.clone()], &[Fs::one(), z_l], jubjub_params)?;
+      let c_l = commit(&[c_l_1, qw.clone()], &[Fs::one(), z_l], jubjub_params)?;
 
       let c_r_1 = commit(g_r, a_l, jubjub_params)?;
-      let c_r = commit(&[c_r_1, q.clone()], &[Fs::one(), z_r], jubjub_params)?;
-
+      let c_r = commit(&[c_r_1, qw.clone()], &[Fs::one(), z_r], jubjub_params)?;
+      println!("l_i: {:?}", c_l.into_xy());
+      println!("r_i: {:?}", c_r.into_xy());
       ls.push(c_l.clone());
       rs.push(c_r.clone());
 
       transcript.commit_point(&c_l)?; // L
       transcript.commit_point(&c_r)?; // R
       let x = transcript.get_challenge(); // x
+      println!("x: {:?}", x);
 
-      println!("{:?}", transcript.state.clone());
       let x_inv = x
         .inverse()
         .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
+      println!("x_inv: {:?}", x_inv);
 
       a = fold_scalars(&a_l, &a_r, &x)?;
       b = fold_scalars(&b_l, &b_r, &x_inv)?;
@@ -202,6 +205,9 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     if a.len() != 1 {
       anyhow::bail!("`a`, `b` and `current_basis` should be 1 at the end of the reduction");
     }
+    println!("a0: {:?}", a[0]);
+    println!("b0: {:?}", b[0]);
+    println!("G0: {:?}", current_basis[0].clone().into_xy());
 
     Ok(IpaProof {
       l: ls,
@@ -221,9 +227,7 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
   ) -> anyhow::Result<bool> {
     let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
-    // transcript.commit_bytes(b"ipa")?;
-
-    // println!("{:?}", self.proof);
+    // println!("{:?}", proof);
     if proof.l.len() != proof.r.len() {
       anyhow::bail!("L and R should be the same size");
     }
@@ -248,31 +252,29 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     let w = transcript.get_challenge();
 
     let q = ipa_conf.q.clone();
-    let qy = ipa_conf.q.clone();
-    let q = q.mul(w.clone(), &jubjub_params);
-    let qy = qy.mul(ip.clone(), &jubjub_params);
-    let mut commitment = commitment.add(&Point::<Bn256, Unknown>::from(qy.clone()), &jubjub_params);
+    let qw = q.mul(w.clone(), &jubjub_params);
+    let qy = qw.mul(ip.clone(), &jubjub_params);
+    let mut result_c = commitment.add(&qy, &jubjub_params);
 
     let challenges = generate_challenges(&proof.clone(), &mut transcript).unwrap();
 
     let mut challenges_inv: Vec<Fs> = Vec::with_capacity(challenges.len());
 
-    let mut minus_one = <Bn256 as JubjubEngine>::Fs::one();
-    minus_one.negate();
-
     // Compute expected commitment
     for (i, x) in challenges.iter().enumerate() {
       println!("challenges_inv: {}/{}", i, challenges.len());
-      // let l = Point::<Bn256, Unknown>::get_for_y(proof.l[i].1, true, &jubjub_params).unwrap();
-      // let r = Point::<Bn256, Unknown>::get_for_y(proof.r[i].1, true, &jubjub_params).unwrap();
       let l = proof.l[i].clone();
       let r = proof.r[i].clone();
 
-      let x_inv = x.pow(minus_one.into_repr());
+      println!("x: {:?}", x);
+      let x_inv = x
+        .inverse()
+        .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
+      println!("x_inv: {:?}", x_inv);
       challenges_inv.push(x_inv.clone());
 
       let one = Fs::one();
-      commitment = commit(&[commitment, l, r], &[one, x.clone(), x_inv], jubjub_params)?;
+      result_c = commit(&[result_c, l, r], &[one, x.clone(), x_inv], jubjub_params)?;
     }
 
     println!("challenges_inv: {}/{}", challenges.len(), challenges.len());
@@ -306,6 +308,9 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     if b.len() != 1 {
       anyhow::bail!("`b` and `current_basis` should be 1 at the end of the reduction");
     }
+    println!("a0: {:?}", proof.a.clone());
+    println!("b0: {:?}", b[0]);
+    println!("G0: {:?}", current_basis[0].clone().into_xy());
 
     println!(
       "reduction ends: {} s",
@@ -315,20 +320,18 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     println!("verification check starts");
     let start = std::time::Instant::now();
 
-    // Compute `result = G[0] * a + (a * b[0]) * Q`.
-    let mut result1 = current_basis[0].clone(); // result1 = G[0]
+    // Compute `result = a[0] * G[0] + (a[0] * b[0] * w) * Q`.
+    let result1 = current_basis[0].mul(proof.a.clone(), &jubjub_params); // result1 = a[0] * G[0]
     let mut part_2a = b[0].clone(); // part_2a = b[0]
+    part_2a.mul_assign(&proof.a); // part_2a = a[0] * b[0]
+    let result2 = qw.mul(part_2a, &jubjub_params); // result2 = a[0] * b[0] * w * Q
 
-    result1 = result1.mul(proof.a.clone(), &jubjub_params); // result1 *= proof_a
-
-    part_2a.mul_assign(&proof.a); // part_2a *= proof_a
-    let mut result2 = q;
-    result2 = result2.mul(part_2a, &jubjub_params); // q *= part_2a
-
-    let result = Point::<Bn256, Unknown>::from(result1.add(&result2, &jubjub_params)); // result = result1 + result2
+    let result = result1.add(&result2, &jubjub_params); // result = result1 + result2
+    println!("result: {:?}", result.into_xy());
+    println!("result_c: {:?}", result_c.into_xy());
 
     // Ensure `commitment` is equal to `result`.
-    let is_ok = commitment.eq(&result);
+    let is_ok = result_c.eq(&result);
 
     println!(
       "verification check ends: {} s",
