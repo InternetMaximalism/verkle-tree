@@ -11,14 +11,12 @@ pub const DOMAIN_SIZE: usize = 256; // common.POLY_DEGREE;
 // This is computed as the product of x_j - x_i where x_i is an element in the domain
 // and x_i is not equal to x_j
 pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> F {
-  // let domain_element_fr = Fr::from(domain_element as u128);
-  if element > DOMAIN_SIZE {
-    panic!(
-      "the domain is [0, {}], {} is not in the domain",
-      DOMAIN_SIZE - 1,
-      element
-    );
-  }
+  assert!(
+    element < DOMAIN_SIZE,
+    "the domain is [0, {}], {} is not in the domain",
+    DOMAIN_SIZE - 1,
+    element
+  );
 
   let domain_element_fr = read_point_le::<F>(&element.to_le_bytes()).unwrap();
 
@@ -60,7 +58,6 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     let mut barycentric_weights = vec![E::Fs::zero(); midpoint * 2];
     for i in 0..midpoint {
       let weight: E::Fs = compute_barycentric_weight_for_element(i);
-
       let inv_weight = weight.inverse().unwrap();
 
       barycentric_weights[i] = weight;
@@ -96,29 +93,27 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
   pub fn compute_barycentric_coefficients(&self, point: &E::Fs) -> anyhow::Result<Vec<E::Fs>> {
     // Compute A(x_i) * point - x_i
     let mut lagrange_evals: Vec<E::Fs> = Vec::with_capacity(DOMAIN_SIZE);
-    for i in 0..DOMAIN_SIZE {
-      let weight = self.barycentric_weights[i];
-      let wrapped_i = read_point_le(&i.to_le_bytes()).unwrap();
-      let mut eval = point.clone();
-      eval.sub_assign(&wrapped_i);
-      eval.mul_assign(&weight);
-      lagrange_evals.push(eval); // Fs
-    }
-
     let mut total_prod = E::Fs::one();
     for i in 0..DOMAIN_SIZE {
-      let i_fr: E::Fs = read_point_le(&i.to_le_bytes())?;
-      let mut tmp = point.clone();
-      tmp.sub_assign(&i_fr);
-      total_prod.mul_assign(&tmp);
+      let weight = self.barycentric_weights[i];
+      let mut tmp: E::Fs = read_point_le(&i.to_le_bytes())?;
+      tmp.sub_assign(&point);
+      tmp.negate();
+      total_prod.mul_assign(&tmp); // total_prod *= (point - i)
+
+      tmp.mul_assign(&weight);
+      lagrange_evals.push(tmp); // lagrange_evals[i] = (point - i) * weight
     }
 
-    let mut minus_one = E::Fs::one();
-    minus_one.negate();
+    // TODO: Calculate the inverses of all elements together.
+    for i in 0..DOMAIN_SIZE {
+      lagrange_evals[i] = lagrange_evals[i].inverse().ok_or(anyhow::anyhow!(
+        "cannot find inverse of `lagrange_evals[i]`"
+      ))?; // lagrange_evals[i] = 1 / ((point - i) * weight)
+    }
 
     for i in 0..DOMAIN_SIZE {
-      lagrange_evals[i] = lagrange_evals[i].pow(minus_one.into_repr());
-      lagrange_evals[i].mul_assign(&total_prod);
+      lagrange_evals[i].mul_assign(&total_prod); // lagrange_evals[i] = total_prod / ((point - i) * weight)
     }
 
     Ok(lagrange_evals)
@@ -146,6 +141,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     result
   }
 
+  // Computes f(x) - f(x_i) / x - x_i where x_i is an element in the domain.
   pub fn divide_on_domain(&self, index: usize, f: &[E::Fs]) -> Vec<E::Fs> {
     let mut quotient = vec![E::Fs::zero(); DOMAIN_SIZE];
 
@@ -154,19 +150,19 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
     for i in 0..DOMAIN_SIZE {
       if i != index {
         // den = i - index
-        let (abs_den, is_neg) = sub_abs(i, index);
+        let (abs_den, is_neg) = sub_abs(i, index); // den = i - index
 
         let den_inv = self.get_inverted_element(abs_den, is_neg);
 
         // compute q_i
         quotient[i] = f[i];
         quotient[i].sub_assign(&y);
-        quotient[i].mul_assign(&den_inv);
+        quotient[i].mul_assign(&den_inv); // quotient[i] = (f[i] - f[index]) / (i - index)
 
         let weight_ratio = self.get_ratio_of_weights(index, i);
         let mut tmp = weight_ratio.clone();
-        tmp.mul_assign(&quotient[i]);
-        quotient[index].sub_assign(&tmp);
+        tmp.mul_assign(&quotient[i]); // tmp = weight_ratio * quotient[i]
+        quotient[index].sub_assign(&tmp); // quotient[index] -= tmp
       }
     }
 
@@ -193,7 +189,9 @@ pub struct IpaConfig<E: JubjubEngine> {
 
 impl<E: JubjubEngine> IpaConfig<E> {
   pub fn new(jubjub_params: &E::Params) -> Self {
+    let start = std::time::Instant::now();
     let srs = generate_random_points(DOMAIN_SIZE, jubjub_params).unwrap();
+    println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
     let q = Point::<E, Unknown>::from(
       jubjub_params
         .generator(FixedGenerators::ProofGenerationKey)

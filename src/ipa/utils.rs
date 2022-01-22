@@ -1,13 +1,13 @@
 // use ff_utils::{Bn256Fr, FromBytes, ToBytes};
 use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::{FixedGenerators, JubjubEngine, JubjubParams, Unknown};
+use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 use sha2::{Digest, Sha256};
 
+use super::config::DOMAIN_SIZE;
+
 pub fn log2_ceil(value: usize) -> usize {
-  if value == 0 {
-    panic!("The first argument must be a positive number.")
-  }
+  assert!(value != 0, "The first argument must be a positive number.");
 
   if value == 1 {
     return 0;
@@ -54,6 +54,7 @@ pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
   let mut repr = F::Repr::default();
   let mut padded_bytes = bytes.to_vec();
   let num_bits = F::NUM_BITS as usize;
+  assert!(bytes.len() <= num_bits);
   for _ in bytes.len()..num_bits {
     padded_bytes.push(0);
   }
@@ -116,7 +117,7 @@ pub fn generate_random_points<E: JubjubEngine>(
   jubjub_params: &E::Params,
 ) -> anyhow::Result<Vec<Point<E, Unknown>>> {
   let mut hasher = Sha256::new();
-  hasher.update(b"eth_verkle_oct_2021"); // incase it changes or needs updating, we can use eth_verkle_month_year
+  hasher.update(b"eth_verkle_oct_2021"); // In case it changes or needs updating, we can use eth_verkle_month_year.
   let digest = hasher.finalize();
   let u = read_point_le::<E::Fr>(digest.as_ref())?;
 
@@ -128,6 +129,7 @@ pub fn generate_random_points<E: JubjubEngine>(
 
   let mut increment = 0usize;
 
+  // TODO: It takes too long to find some random points with the specific order.
   while points.len() != num_points {
     let mut y = u.clone();
     y.add_assign(&read_point_le(&increment.to_le_bytes()).unwrap()); // y = u + increment
@@ -275,4 +277,24 @@ pub fn commit<E: JubjubEngine>(
   let result = multi_scalar::<E>(group_elements, polynomial, jubjub_params)?;
 
   Ok(result)
+}
+
+pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
+  let n = polynomial.len();
+  assert!(
+    n <= DOMAIN_SIZE,
+    "polynomial cannot exceed {} coefficients",
+    DOMAIN_SIZE
+  );
+
+  let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
+  for i in 0..n {
+    let polynomial_i: F = read_point_le(&polynomial[i].to_le_bytes()).unwrap();
+    polynomial_fr.push(polynomial_i);
+  }
+
+  for _ in n..DOMAIN_SIZE {
+    polynomial_fr.push(F::zero());
+  }
+  polynomial_fr
 }
