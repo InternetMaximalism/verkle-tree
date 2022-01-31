@@ -191,6 +191,8 @@ impl<E: JubjubEngine> IpaConfig<E> {
   pub fn new(jubjub_params: &E::Params) -> Self {
     let start = std::time::Instant::now();
     let srs = generate_random_points(DOMAIN_SIZE, jubjub_params).unwrap();
+    println!("{:?}", srs[0].into_xy());
+    println!("{:?}", srs[1].into_xy());
     println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
     let q = Point::<E, Unknown>::from(
       jubjub_params
