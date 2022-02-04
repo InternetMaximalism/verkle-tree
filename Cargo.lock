@@ -1572,6 +1572,7 @@ dependencies = [
  "ff 0.11.0",
  "ff_utils",
  "franklin-crypto",
+ "generic-array 0.14.5",
  "hex",
  "neptune",
  "num-bigint 0.3.3",
@@ -1579,7 +1580,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.1",
- "typenum",
 ]
 
 [[package]]
