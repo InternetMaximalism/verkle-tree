@@ -22,3 +22,6 @@ serde_json = "1.0"
 sha2 = "0.10"
 franklin-crypto = {git = "https://github.com/matter-labs/franklin-crypto", branch = "beta", features = ["multicore", "plonk"]}
 ff_utils = { version = "1.0.0", path = "./packages/ff_utils" }
+
+[lib]
+name = "verkle_tree"
