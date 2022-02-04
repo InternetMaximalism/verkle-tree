@@ -63,6 +63,12 @@ pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     Ok(value)
 }
 
+pub fn read_point_be<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
+    let mut padded_bytes = bytes.to_vec();
+    padded_bytes.reverse();
+    read_point_le(&padded_bytes)
+}
+
 pub fn write_point_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
     let scalar_u64_vec = scalar.into_repr().as_ref().to_vec();
     let mut result = vec![0; scalar_u64_vec.len() * 8];
@@ -76,6 +82,13 @@ pub fn write_point_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
         // }
         tmp[..bytes.len()].clone_from_slice(&bytes[..]);
     }
+
+    result
+}
+
+pub fn write_point_be<F: PrimeField>(scalar: &F) -> Vec<u8> {
+    let mut result = write_point_le(scalar);
+    result.reverse();
 
     result
 }
