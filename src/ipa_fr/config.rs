@@ -27,7 +27,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
 
         let i_fr = read_point_le::<F>(&i.to_le_bytes()).unwrap();
 
-        let mut tmp = domain_element_fr.clone();
+        let mut tmp = domain_element_fr;
         tmp.sub_assign(&i_fr);
         total.mul_assign(&tmp);
     }
@@ -43,8 +43,8 @@ pub struct PrecomputedWeights<F: PrimeField> {
     pub inverted_domain: Vec<F>,
 }
 
-impl<F: PrimeField> PrecomputedWeights<F> {
-    pub fn new() -> Self {
+impl<F: PrimeField> Default for PrecomputedWeights<F> {
+    fn default() -> Self {
         // Imagine we have two arrays of the same length and we concatenate them together
         // This is how we will store the A'(x_i) and 1/A'(x_i)
         // This midpoint variable is used to compute the offset that we need
@@ -83,6 +83,12 @@ impl<F: PrimeField> PrecomputedWeights<F> {
             // rns_params,
         }
     }
+}
+
+impl<F: PrimeField> PrecomputedWeights<F> {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     // Computes the coefficients `barycentric_coeffs` for a point `z` such that
     // when we have a polynomial `p` in lagrange basis, the inner product of `p` and `barycentric_coeffs`
@@ -96,7 +102,7 @@ impl<F: PrimeField> PrecomputedWeights<F> {
         for i in 0..DOMAIN_SIZE {
             let weight = self.barycentric_weights[i];
             let mut tmp = read_point_le::<F>(&i.to_le_bytes())?;
-            tmp.sub_assign(&point);
+            tmp.sub_assign(point);
             tmp.negate();
             total_prod.mul_assign(&tmp); // total_prod *= (point - i)
 
@@ -117,8 +123,8 @@ impl<F: PrimeField> PrecomputedWeights<F> {
             tmp
         };
 
-        for i in 0..DOMAIN_SIZE {
-            lagrange_evals[i].mul_assign(&total_prod); // lagrange_evals[i] = total_prod / ((point - i) * weight)
+        for eval in lagrange_evals.iter_mut() {
+            eval.mul_assign(&total_prod); // lagrange_evals[i] = total_prod / ((point - i) * weight)
         }
 
         Ok(lagrange_evals)
@@ -133,7 +139,7 @@ impl<F: PrimeField> PrecomputedWeights<F> {
             index += midpoint;
         }
 
-        return self.inverted_domain[index];
+        self.inverted_domain[index]
     }
 
     pub fn get_ratio_of_weights(&self, numerator: usize, denominator: usize) -> F {
@@ -165,7 +171,7 @@ impl<F: PrimeField> PrecomputedWeights<F> {
                 quotient[i].mul_assign(&den_inv); // quotient[i] = (f[i] - f[index]) / (i - index)
 
                 let weight_ratio = self.get_ratio_of_weights(index, i);
-                let mut tmp = weight_ratio.clone();
+                let mut tmp = weight_ratio;
                 tmp.mul_assign(&quotient[i]); // tmp = weight_ratio * quotient[i]
                 quotient[index].sub_assign(&tmp); // quotient[index] -= tmp
             }
@@ -192,11 +198,11 @@ pub struct IpaConfig<G: CurveProjective> {
     pub num_ipa_rounds: usize,
 }
 
-impl<G: CurveProjective> IpaConfig<G>
+impl<G: CurveProjective> Default for IpaConfig<G>
 where
     <G::Affine as CurveAffine>::Base: PrimeField,
 {
-    pub fn new() -> Self {
+    fn default() -> Self {
         let start = std::time::Instant::now();
         let srs = generate_random_points::<G>(DOMAIN_SIZE).unwrap();
         println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
@@ -210,6 +216,15 @@ where
             precomputed_weights,
             num_ipa_rounds,
         }
+    }
+}
+
+impl<G: CurveProjective> IpaConfig<G>
+where
+    <G::Affine as CurveAffine>::Base: PrimeField,
+{
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 

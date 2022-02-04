@@ -43,7 +43,7 @@ mod tests {
     use super::{Bn256Ipa, Ipa};
 
     #[test]
-    fn test_ipa_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ipa_fr_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
         let point: Fr = read_point_le(&123456789u64.to_le_bytes()).unwrap();
         let ipa_conf = &IpaConfig::<G1>::new();
 
@@ -54,7 +54,7 @@ mod tests {
         let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
 
         let proof = Bn256Ipa::create_proof(
-            prover_commitment.clone(),
+            prover_commitment,
             &poly,
             point,
             prover_transcript.into_params(),
@@ -69,7 +69,7 @@ mod tests {
         // test_serialize_deserialize_proof(proof);
 
         // Verifier view
-        let verifier_commitment = prover_commitment.clone(); // In reality, the verifier will rebuild this themselves
+        let verifier_commitment = prover_commitment; // In reality, the verifier will rebuild this themselves
         let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
 
         let success = Bn256Ipa::check_proof(
@@ -125,9 +125,9 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             start.elapsed().as_micros() as f64 / 1000000.0
         );
 
-        let q = ipa_conf.q.clone();
-        let mut qw = q.clone();
-        qw.mul_assign(w.clone());
+        let q = ipa_conf.q;
+        let mut qw = q;
+        qw.mul_assign(w);
 
         let num_rounds = ipa_conf.num_ipa_rounds;
 
@@ -149,15 +149,15 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             let g_l = g_lr[0];
             let g_r = g_lr[1];
 
-            let z_l = inner_prod(&a_r, &b_l)?;
-            let z_r = inner_prod(&a_l, &b_r)?;
+            let z_l = inner_prod(a_r, b_l)?;
+            let z_r = inner_prod(a_l, b_r)?;
 
             let start = std::time::Instant::now();
             let c_l_1 = commit(g_l, a_r)?;
-            let c_l = commit(&[c_l_1, qw.clone()], &[Fr::one(), z_l])?;
+            let c_l = commit(&[c_l_1, qw], &[Fr::one(), z_l])?;
 
             let c_r_1 = commit(g_r, a_l)?;
-            let c_r = commit(&[c_r_1, qw.clone()], &[Fr::one(), z_r])?;
+            let c_r = commit(&[c_r_1, qw], &[Fr::one(), z_r])?;
             println!(
                 "commit: {} s",
                 start.elapsed().as_micros() as f64 / 1000000.0
@@ -180,9 +180,9 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
 
-            a = fold_scalars(&a_l, &a_r, &x)?;
-            b = fold_scalars(&b_l, &b_r, &x_inv)?;
-            current_basis = fold_points(&g_l, &g_r, x_inv.clone())?;
+            a = fold_scalars(a_l, a_r, &x)?;
+            b = fold_scalars(b_l, b_r, &x_inv)?;
+            current_basis = fold_points(g_l, g_r, x_inv)?;
 
             println!(
                 "lap: {} s",
@@ -237,15 +237,15 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
 
         let w = transcript.get_challenge();
 
-        let q = ipa_conf.q.clone();
-        let mut qw = q.clone();
-        qw.mul_assign(w.clone());
-        let mut qy = qw.clone();
-        qy.mul_assign(ip.clone());
-        let mut result_c = commitment.clone();
+        let q = ipa_conf.q;
+        let mut qw = q;
+        qw.mul_assign(w);
+        let mut qy = qw;
+        qy.mul_assign(ip);
+        let mut result_c = commitment;
         result_c.add_assign(&qy);
 
-        let challenges = generate_challenges(&proof.clone(), &mut transcript).unwrap();
+        let challenges = generate_challenges(&proof, &mut transcript).unwrap();
 
         let mut challenges_inv: Vec<Fr> = Vec::with_capacity(challenges.len());
 
@@ -258,10 +258,10 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             let x_inv = x
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
-            challenges_inv.push(x_inv.clone());
+            challenges_inv.push(x_inv);
 
             let one = Fr::one();
-            result_c = commit(&[result_c, l, r], &[one, x.clone(), x_inv])?;
+            result_c = commit(&[result_c, l, r], &[one, *x, x_inv])?;
         }
 
         // println!("challenges_inv: {}/{}", challenges.len(), challenges.len());
@@ -287,7 +287,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             let b_r = b_chunks.next().unwrap().to_vec();
 
             b = fold_scalars(&b_l, &b_r, &x_inv.clone())?;
-            current_basis = fold_points(&g_l, &g_r, x_inv.clone())?;
+            current_basis = fold_points(&g_l, &g_r, *x_inv)?;
         }
 
         // println!("x_inv: {}/{}", challenges_inv.len(), challenges_inv.len());
@@ -305,16 +305,16 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         let start = std::time::Instant::now();
 
         // Compute `result = a[0] * G[0] + (a[0] * b[0] * w) * Q`.
-        let mut result1 = current_basis[0].clone();
-        result1.mul_assign(proof.a.clone()); // result1 = a[0] * G[0]
-        let mut part_2a = b[0].clone(); // part_2a = b[0]
+        let mut result1 = current_basis[0];
+        result1.mul_assign(proof.a); // result1 = a[0] * G[0]
+        let mut part_2a = b[0]; // part_2a = b[0]
         part_2a.mul_assign(&proof.a); // part_2a = a[0] * b[0]
-        let mut result2 = qw.clone();
+        let mut result2 = qw;
         result2.mul_assign(part_2a); // result2 = a[0] * b[0] * w * Q
-        let mut result = result1.clone();
+        let mut result = result1;
         result.add_assign(&result2); // result = result1 + result2
 
-        // Ensure `commitment` is equal to `result`.
+        // Ensure `result_c` is equal to `result`.
         let is_ok = result_c.eq(&result);
 
         println!(

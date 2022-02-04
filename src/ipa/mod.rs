@@ -84,7 +84,7 @@ mod tests {
         // test_serialize_deserialize_proof(proof);
 
         // Verifier view
-        let verifier_commitment = prover_commitment.clone(); // In reality, the verifier will rebuild this themselves
+        let verifier_commitment = prover_commitment; // In reality, the verifier will rebuild this themselves
         let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
 
         let success = Bn256Ipa::check_proof(
@@ -143,7 +143,7 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
         );
 
         let q = ipa_conf.q.clone();
-        let qw = q.clone().mul(w.clone(), jubjub_params);
+        let qw = q.mul(w, jubjub_params);
 
         let num_rounds = ipa_conf.num_ipa_rounds;
 
@@ -165,8 +165,8 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
             let g_l = g_lr[0];
             let g_r = g_lr[1];
 
-            let z_l = inner_prod(&a_r, &b_l)?;
-            let z_r = inner_prod(&a_l, &b_r)?;
+            let z_l = inner_prod(a_r, b_l)?;
+            let z_r = inner_prod(a_l, b_r)?;
 
             let start = std::time::Instant::now();
             let c_l_1 = commit(g_l, a_r, jubjub_params)?;
@@ -196,9 +196,9 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
 
-            a = fold_scalars(&a_l, &a_r, &x)?;
-            b = fold_scalars(&b_l, &b_r, &x_inv)?;
-            current_basis = fold_points(&g_l, &g_r, &x_inv, jubjub_params)?;
+            a = fold_scalars(a_l, a_r, &x)?;
+            b = fold_scalars(b_l, b_r, &x_inv)?;
+            current_basis = fold_points(g_l, g_r, &x_inv, jubjub_params)?;
 
             println!(
                 "lap: {} s",
@@ -255,11 +255,11 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
         let w = transcript.get_challenge();
 
         let q = ipa_conf.q.clone();
-        let qw = q.mul(w.clone(), &jubjub_params);
-        let qy = qw.mul(ip.clone(), &jubjub_params);
-        let mut result_c = commitment.add(&qy, &jubjub_params);
+        let qw = q.mul(w, jubjub_params);
+        let qy = qw.mul(ip, jubjub_params);
+        let mut result_c = commitment.add(&qy, jubjub_params);
 
-        let challenges = generate_challenges(&proof.clone(), &mut transcript).unwrap();
+        let challenges = generate_challenges(&proof, &mut transcript).unwrap();
 
         let mut challenges_inv: Vec<Fs> = Vec::with_capacity(challenges.len());
 
@@ -272,10 +272,10 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
             let x_inv = x
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
-            challenges_inv.push(x_inv.clone());
+            challenges_inv.push(x_inv);
 
             let one = Fs::one();
-            result_c = commit(&[result_c, l, r], &[one, x.clone(), x_inv], jubjub_params)?;
+            result_c = commit(&[result_c, l, r], &[one, *x, x_inv], jubjub_params)?;
         }
 
         // println!("challenges_inv: {}/{}", challenges.len(), challenges.len());
@@ -301,7 +301,7 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
             let b_r = b_chunks.next().unwrap().to_vec();
 
             b = fold_scalars::<Fs>(&b_l, &b_r, &x_inv.clone())?;
-            current_basis = fold_points(&g_l, &g_r, &x_inv.clone(), &jubjub_params)?;
+            current_basis = fold_points(&g_l, &g_r, &x_inv.clone(), jubjub_params)?;
         }
 
         // println!("x_inv: {}/{}", challenges_inv.len(), challenges_inv.len());
@@ -319,11 +319,11 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
         let start = std::time::Instant::now();
 
         // Compute `result = a[0] * G[0] + (a[0] * b[0] * w) * Q`.
-        let result1 = current_basis[0].mul(proof.a.clone(), &jubjub_params); // result1 = a[0] * G[0]
-        let mut part_2a = b[0].clone(); // part_2a = b[0]
+        let result1 = current_basis[0].mul(proof.a, jubjub_params); // result1 = a[0] * G[0]
+        let mut part_2a = b[0]; // part_2a = b[0]
         part_2a.mul_assign(&proof.a); // part_2a = a[0] * b[0]
-        let result2 = qw.mul(part_2a, &jubjub_params); // result2 = a[0] * b[0] * w * Q
-        let result = result1.add(&result2, &jubjub_params); // result = result1 + result2
+        let result2 = qw.mul(part_2a, jubjub_params); // result2 = a[0] * b[0] * w * Q
+        let result = result1.add(&result2, jubjub_params); // result = result1 + result2
 
         // Ensure `commitment` is equal to `result`.
         let is_ok = result_c.eq(&result);

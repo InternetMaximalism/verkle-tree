@@ -29,7 +29,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
 
         let i_fr = read_point_le::<F>(&i.to_le_bytes()).unwrap();
 
-        let mut tmp = domain_element_fr.clone();
+        let mut tmp = domain_element_fr;
         tmp.sub_assign(&i_fr);
         total.mul_assign(&tmp);
     }
@@ -45,8 +45,8 @@ pub struct PrecomputedWeights<E: JubjubEngine> {
     pub inverted_domain: Vec<E::Fs>,
 }
 
-impl<E: JubjubEngine> PrecomputedWeights<E> {
-    pub fn new() -> Self {
+impl<E: JubjubEngine> Default for PrecomputedWeights<E> {
+    fn default() -> Self {
         // Imagine we have two arrays of the same length and we concatenate them together
         // This is how we will store the A'(x_i) and 1/A'(x_i)
         // This midpoint variable is used to compute the offset that we need
@@ -84,6 +84,12 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
             inverted_domain,
         }
     }
+}
+
+impl<E: JubjubEngine> PrecomputedWeights<E> {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     // Computes the coefficients `barycentric_coeffs` for a point `z` such that
     // when we have a polynomial `p` in lagrange basis, the inner product of `p` and `barycentric_coeffs`
@@ -97,7 +103,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
         for i in 0..DOMAIN_SIZE {
             let weight = self.barycentric_weights[i];
             let mut tmp: E::Fs = read_point_le(&i.to_le_bytes())?;
-            tmp.sub_assign(&point);
+            tmp.sub_assign(point);
             tmp.negate();
             total_prod.mul_assign(&tmp); // total_prod *= (point - i)
 
@@ -106,14 +112,20 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
         }
 
         // TODO: Calculate the inverses of all elements together.
-        for i in 0..DOMAIN_SIZE {
-            lagrange_evals[i] = lagrange_evals[i].inverse().ok_or(anyhow::anyhow!(
-                "cannot find inverse of `lagrange_evals[i]`"
-            ))?; // lagrange_evals[i] = 1 / ((point - i) * weight)
-        }
+        let mut lagrange_evals = {
+            let mut tmp = vec![];
+            for eval in lagrange_evals {
+                let inverse_of_eval = eval.inverse().ok_or(anyhow::anyhow!(
+                    "cannot find inverse of `lagrange_evals[i]`"
+                ))?; // lagrange_evals[i] = 1 / ((point - i) * weight)
+                tmp.push(inverse_of_eval);
+            }
 
-        for i in 0..DOMAIN_SIZE {
-            lagrange_evals[i].mul_assign(&total_prod); // lagrange_evals[i] = total_prod / ((point - i) * weight)
+            tmp
+        };
+
+        for lagrange_evals_i in lagrange_evals.iter_mut() {
+            lagrange_evals_i.mul_assign(&total_prod); // lagrange_evals[i] = total_prod / ((point - i) * weight)
         }
 
         Ok(lagrange_evals)
@@ -128,7 +140,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
             index += midpoint;
         }
 
-        return self.inverted_domain[index];
+        self.inverted_domain[index]
     }
 
     pub fn get_ratio_of_weights(&self, numerator: usize, denominator: usize) -> E::Fs {
@@ -160,7 +172,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
                 quotient[i].mul_assign(&den_inv); // quotient[i] = (f[i] - f[index]) / (i - index)
 
                 let weight_ratio = self.get_ratio_of_weights(index, i);
-                let mut tmp = weight_ratio.clone();
+                let mut tmp = weight_ratio;
                 tmp.mul_assign(&quotient[i]); // tmp = weight_ratio * quotient[i]
                 quotient[index].sub_assign(&tmp); // quotient[index] -= tmp
             }

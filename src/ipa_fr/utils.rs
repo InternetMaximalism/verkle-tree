@@ -53,9 +53,10 @@ pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     let mut padded_bytes = bytes.to_vec();
     let num_bits = F::NUM_BITS as usize;
     assert!(bytes.len() <= num_bits);
-    for _ in bytes.len()..num_bits {
-        padded_bytes.push(0);
-    }
+    // for _ in bytes.len()..num_bits {
+    //     padded_bytes.push(0);
+    // }
+    padded_bytes.resize(num_bits, 0);
     repr.read_le::<&[u8]>(padded_bytes.as_ref())?;
     let value = F::from_repr(repr)?;
 
@@ -70,9 +71,10 @@ pub fn write_point_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
         .map(|x| x.to_le_bytes())
         .zip(result.chunks_mut(8))
     {
-        for i in 0..bytes.len() {
-            tmp[i] = bytes[i];
-        }
+        // for i in 0..bytes.len() {
+        //     tmp[i] = bytes[i];
+        // }
+        tmp[..bytes.len()].clone_from_slice(&bytes[..]);
     }
 
     result
@@ -129,11 +131,11 @@ where
 
     // TODO: It takes too long to find some random points with the specific order.
     while points.len() != num_points {
-        let mut x = u.clone();
+        let mut x = u;
         x.add_assign(&read_point_le(&increment.to_le_bytes()).unwrap()); // y = u + increment
         increment += 1;
 
-        let mut rhs = x.clone();
+        let mut rhs = x;
         rhs.square();
         rhs.mul_assign(&x);
         rhs.add_assign(&G::Affine::b_coeff());
@@ -258,7 +260,7 @@ where
 
     let mut result = G::zero();
     for i in 0..points.len() {
-        let mut tmp = points[i].clone();
+        let mut tmp = points[i];
         tmp.mul_assign(scalars[i]); // tmp = points[i] * scalars[i]
         result.add_assign(&tmp); // result += tmp
     }
@@ -286,13 +288,14 @@ pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
     );
 
     let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
-    for i in 0..n {
-        let polynomial_i: F = read_point_le(&polynomial[i].to_le_bytes()).unwrap();
-        polynomial_fr.push(polynomial_i);
+    for polynomial_i in polynomial {
+        polynomial_fr.push(read_point_le(&polynomial_i.to_le_bytes()).unwrap());
     }
 
-    for _ in n..DOMAIN_SIZE {
-        polynomial_fr.push(F::zero());
-    }
+    // for _ in n..DOMAIN_SIZE {
+    //     polynomial_fr.push(F::zero());
+    // }
+    polynomial_fr.resize(DOMAIN_SIZE, F::zero());
+
     polynomial_fr
 }

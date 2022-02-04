@@ -174,17 +174,17 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
         let mut powers_of_r = Fs::one(); // powers_of_r = 1
         for i in 0..num_queries {
             let z_i = read_point_le::<Fs>(&zs[i].to_le_bytes()).unwrap();
-            let mut den = t.clone(); // den_inv = t
+            let mut den = t; // den_inv = t
             den.sub_assign(&z_i); // den_inv = t - z_i
             let den_inv = den
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `t - z_i`"))?; // den_inv = 1 / (t - z_i)
 
-            for k in 0..DOMAIN_SIZE {
-                let mut tmp = powers_of_r.clone();
+            for (k, h_x_k) in h_x.iter_mut().enumerate() {
+                let mut tmp = powers_of_r;
                 tmp.mul_assign(&fs[i][k]);
                 tmp.mul_assign(&den_inv);
-                h_x[k].add_assign(&tmp); // h_x[k] += r^i * f[i][k] / (t - z_i)
+                h_x_k.add_assign(&tmp); // h_x[k] += r^i * f[i][k] / (t - z_i)
             }
 
             powers_of_r.mul_assign(&r); // powers_of_r *= r
@@ -192,7 +192,7 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
 
         let mut h_minus_g = vec![Fs::zero(); DOMAIN_SIZE];
         for i in 0..DOMAIN_SIZE {
-            h_minus_g[i] = h_x[i].clone();
+            h_minus_g[i] = h_x[i];
             h_minus_g[i].sub_assign(&g_x[i]);
         }
 
@@ -295,11 +295,10 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
         // this is more readable, so will leave for now
         let mut helper_scalars: Vec<Fs> = Vec::with_capacity(num_queries);
         let mut powers_of_r = Fs::one(); // powers_of_r = 1
-        for i in 0..num_queries {
+        for z_i in zs.iter() {
             // helper_scalars[i] = r^i / (t - z_i)
-            let z_i = read_point_le::<Fs>(&zs[i].to_le_bytes()).unwrap();
             let mut t_minus_z_i = t;
-            t_minus_z_i.sub_assign(&z_i); // t - z_i
+            t_minus_z_i.sub_assign(&read_point_le::<Fs>(&z_i.to_le_bytes()).unwrap()); // t - z_i
 
             let mut helper_scalars_i = t_minus_z_i
                 .inverse()
@@ -321,14 +320,14 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
         // Compute E = \sum_{i = 0}^{num_queries - 1} C_i * (r^i / t - z_i)
         let mut e = Point::zero();
         for (i, c_i) in commitments.iter().enumerate() {
-            let tmp = c_i.mul(helper_scalars[i], &jubjub_params); // tmp = c_i * helper_scalars_i
-            e = e.add(&tmp, &jubjub_params); // e += c_i * helper_scalars_i
+            let tmp = c_i.mul(helper_scalars[i], jubjub_params); // tmp = c_i * helper_scalars_i
+            e = e.add(&tmp, jubjub_params); // e += c_i * helper_scalars_i
         }
 
         transcript.commit_point(&e)?;
 
         let minus_d = proof.d.negate();
-        let e_minus_d = e.add(&minus_d, &jubjub_params);
+        let e_minus_d = e.add(&minus_d, jubjub_params);
 
         let transcript_params = transcript.get_challenge();
         Bn256Ipa::check_proof(

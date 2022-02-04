@@ -16,8 +16,8 @@ pub fn generate_challenges<T: Bn256Transcript>(
 ) -> anyhow::Result<Vec<Fr>> {
     let mut challenges: Vec<Fr> = Vec::with_capacity(ipa_proof.l.len());
     for (l, r) in ipa_proof.l.iter().zip(&ipa_proof.r) {
-        transcript.commit_point(&l)?; // L[i]
-        transcript.commit_point(&r)?; // R[i]
+        transcript.commit_point(l)?; // L[i]
+        transcript.commit_point(r)?; // R[i]
 
         let c = transcript.get_challenge();
         challenges.push(c);

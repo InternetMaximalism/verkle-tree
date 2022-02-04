@@ -45,7 +45,7 @@ impl Bn256Transcript for PoseidonBn256Transcript {
 
         Self {
             // blake_2s_state,
-            state: convert_ff_ce_to_ff(init_state.clone()).unwrap(),
+            state: convert_ff_ce_to_ff(*init_state).unwrap(),
             // _marker: std::marker::PhantomData,
         }
     }
@@ -54,7 +54,7 @@ impl Bn256Transcript for PoseidonBn256Transcript {
         let mut preimage = vec![<Bn256Fs as ff::Field>::zero(); 2];
         let constants = PoseidonConstants::new();
         preimage[0] = self.state;
-        preimage[1] = convert_ff_ce_to_ff(element.clone()).unwrap();
+        preimage[1] = convert_ff_ce_to_ff(*element).unwrap();
 
         let mut h = Poseidon::<Bn256Fs, typenum::U2>::new_with_preimage(&preimage, &constants);
         self.state = h.hash();
@@ -77,9 +77,9 @@ impl Bn256Transcript for PoseidonBn256Transcript {
     }
 
     fn get_challenge(&self) -> Fs {
-        let challenge = convert_ff_to_ff_ce(self.state.clone()).unwrap();
+        
 
-        challenge
+        convert_ff_to_ff_ce(self.state).unwrap()
     }
 }
 
@@ -88,10 +88,10 @@ impl PoseidonBn256Transcript {
         let chunk_size = (Fs::NUM_BITS / 8) as usize;
         assert!(chunk_size != 0);
         assert!(bytes.len() <= chunk_size);
-        let element = read_point_le::<Fs>(&bytes).unwrap();
+        let element = read_point_le::<Fs>(bytes).unwrap();
 
         Self {
-            state: convert_ff_ce_to_ff(element.clone()).unwrap(),
+            state: convert_ff_ce_to_ff(element).unwrap(),
         }
     }
 
@@ -99,7 +99,7 @@ impl PoseidonBn256Transcript {
         let chunk_size = (Fs::NUM_BITS / 8) as usize;
         assert!(chunk_size != 0);
         for b in bytes.chunks(chunk_size) {
-            let element = read_point_le::<Fs>(&b).unwrap();
+            let element = read_point_le::<Fs>(b).unwrap();
             self.commit_field_element(&element)?;
         }
 
