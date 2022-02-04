@@ -1,6 +1,6 @@
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field, PrimeField};
 
-use super::utils::{commit, generate_random_points, log2_ceil, read_point_le};
+use super::utils::{commit, generate_random_points, log2_ceil, read_field_element_le};
 
 pub const NUM_IPA_ROUNDS: usize = 8; // log_2(common.POLY_DEGREE);
 pub const DOMAIN_SIZE: usize = 256; // common.POLY_DEGREE;
@@ -16,7 +16,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
         element
     );
 
-    let domain_element_fr = read_point_le::<F>(&element.to_le_bytes()).unwrap();
+    let domain_element_fr = read_field_element_le::<F>(&element.to_le_bytes()).unwrap();
 
     let mut total = F::one();
 
@@ -25,7 +25,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
             continue;
         }
 
-        let i_fr = read_point_le::<F>(&i.to_le_bytes()).unwrap();
+        let i_fr = read_field_element_le::<F>(&i.to_le_bytes()).unwrap();
 
         let mut tmp = domain_element_fr;
         tmp.sub_assign(&i_fr);
@@ -67,7 +67,7 @@ impl<F: PrimeField> Default for PrecomputedWeights<F> {
         let midpoint = DOMAIN_SIZE - 1;
         let mut inverted_domain = vec![<F as Field>::zero(); midpoint * 2];
         for i in 1..DOMAIN_SIZE {
-            let k = read_point_le::<F>(&i.to_le_bytes()).unwrap();
+            let k = read_field_element_le::<F>(&i.to_le_bytes()).unwrap();
             let k = k.inverse().unwrap();
 
             let mut negative_k = <F as Field>::zero();
@@ -101,7 +101,7 @@ impl<F: PrimeField> PrecomputedWeights<F> {
         let mut total_prod = F::one();
         for i in 0..DOMAIN_SIZE {
             let weight = self.barycentric_weights[i];
-            let mut tmp = read_point_le::<F>(&i.to_le_bytes())?;
+            let mut tmp = read_field_element_le::<F>(&i.to_le_bytes())?;
             tmp.sub_assign(point);
             tmp.negate();
             total_prod.mul_assign(&tmp); // total_prod *= (point - i)
@@ -192,9 +192,9 @@ fn sub_abs<N: std::ops::Sub<Output = N> + std::cmp::PartialOrd>(a: N, b: N) -> (
 
 #[derive(Clone)]
 pub struct IpaConfig<G: CurveProjective> {
-    pub srs: Vec<G>,
-    pub q: G,
-    pub precomputed_weights: PrecomputedWeights<<G as CurveProjective>::Scalar>,
+    pub srs: Vec<G::Affine>,
+    pub q: G::Affine,
+    pub precomputed_weights: PrecomputedWeights<G::Scalar>,
     pub num_ipa_rounds: usize,
 }
 
@@ -206,7 +206,7 @@ where
         let start = std::time::Instant::now();
         let srs = generate_random_points::<G>(DOMAIN_SIZE).unwrap();
         println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
-        let q = <G as CurveProjective>::one();
+        let q = <G::Affine as CurveAffine>::one();
         let precomputed_weights = PrecomputedWeights::new();
         let num_ipa_rounds = log2_ceil(DOMAIN_SIZE);
 
@@ -229,7 +229,20 @@ where
 }
 
 impl<G: CurveProjective> IpaConfig<G> {
-    pub fn commit(&self, polynomial: &[<G as CurveProjective>::Scalar]) -> anyhow::Result<G> {
-        commit::<G>(&self.srs, polynomial)
+    pub fn commit(
+        &self,
+        polynomial: &[<G::Affine as CurveAffine>::Scalar],
+    ) -> anyhow::Result<G::Affine> {
+        let result = commit::<G>(
+            &self
+                .srs
+                .iter()
+                .map(|x| x.into_projective())
+                .collect::<Vec<_>>(),
+            polynomial,
+        )?
+        .into_affine();
+
+        Ok(result)
     }
 }

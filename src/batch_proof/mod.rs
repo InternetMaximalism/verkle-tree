@@ -7,7 +7,7 @@ use franklin_crypto::bellman::Field;
 use crate::ipa::config::{IpaConfig, DOMAIN_SIZE};
 use crate::ipa::proof::IpaProof;
 use crate::ipa::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-use crate::ipa::utils::read_point_le;
+use crate::ipa::utils::read_field_element_le;
 use crate::ipa::{Bn256Ipa, Ipa};
 
 #[derive(Clone)]
@@ -173,7 +173,7 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
         let mut h_x = vec![Fs::zero(); DOMAIN_SIZE];
         let mut powers_of_r = Fs::one(); // powers_of_r = 1
         for i in 0..num_queries {
-            let z_i = read_point_le::<Fs>(&zs[i].to_le_bytes()).unwrap();
+            let z_i = read_field_element_le::<Fs>(&zs[i].to_le_bytes()).unwrap();
             let mut den = t; // den_inv = t
             den.sub_assign(&z_i); // den_inv = t - z_i
             let den_inv = den
@@ -298,7 +298,7 @@ impl BatchProof<Bn256, PoseidonBn256Transcript> for Bn256BatchProof {
         for z_i in zs.iter() {
             // helper_scalars[i] = r^i / (t - z_i)
             let mut t_minus_z_i = t;
-            t_minus_z_i.sub_assign(&read_point_le::<Fs>(&z_i.to_le_bytes()).unwrap()); // t - z_i
+            t_minus_z_i.sub_assign(&read_field_element_le::<Fs>(&z_i.to_le_bytes()).unwrap()); // t - z_i
 
             let mut helper_scalars_i = t_minus_z_i
                 .inverse()

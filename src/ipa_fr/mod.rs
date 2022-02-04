@@ -5,7 +5,7 @@ pub mod transcript;
 pub mod utils;
 
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
-use franklin_crypto::bellman::{CurveProjective, Field};
+use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
 use self::config::IpaConfig;
 use self::proof::{generate_challenges, IpaProof};
@@ -14,7 +14,7 @@ use self::utils::{commit, fold_points, fold_scalars, inner_prod};
 
 pub trait Ipa<G: CurveProjective, T: Bn256Transcript> {
     fn create_proof(
-        commitment: G,
+        commitment: G::Affine,
         a: &[<G as CurveProjective>::Scalar],
         eval_point: <G as CurveProjective>::Scalar,
         transcript_params: T::Params,
@@ -39,12 +39,12 @@ mod tests {
 
     use super::config::IpaConfig;
     use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-    use super::utils::{inner_prod, read_point_le, test_poly};
+    use super::utils::{inner_prod, read_field_element_le, test_poly};
     use super::{Bn256Ipa, Ipa};
 
     #[test]
     fn test_ipa_fr_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
-        let point: Fr = read_point_le(&123456789u64.to_le_bytes()).unwrap();
+        let point: Fr = read_field_element_le(&123456789u64.to_le_bytes()).unwrap();
         let ipa_conf = &IpaConfig::<G1>::new();
 
         // Prover view
@@ -89,14 +89,18 @@ mod tests {
 
 impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
     fn create_proof(
-        commitment: G1,
+        commitment: <G1 as CurveProjective>::Affine,
         a: &[Fr],
         eval_point: Fr,
         transcript_params: Fr,
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<IpaProof<G1>> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
-        let mut current_basis = ipa_conf.srs.clone();
+        let mut current_basis = ipa_conf
+            .srs
+            .iter()
+            .map(|x| x.into_projective())
+            .collect::<Vec<_>>();
         // let _commitment = commit(&current_basis.clone(), a, jubjub_params)?;
         // assert!(commitment.eq(&_commitment));
 
@@ -116,7 +120,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         let ip = inner_prod(&a, &b)?;
 
         let start = std::time::Instant::now();
-        transcript.commit_point(&commitment)?; // C
+        transcript.commit_point(&commitment.into_projective())?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
@@ -125,7 +129,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             start.elapsed().as_micros() as f64 / 1000000.0
         );
 
-        let q = ipa_conf.q;
+        let q = ipa_conf.q.into_projective();
         let mut qw = q;
         qw.mul_assign(w);
 
@@ -163,8 +167,8 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
                 start.elapsed().as_micros() as f64 / 1000000.0
             );
 
-            ls.push(c_l);
-            rs.push(c_r);
+            ls.push(c_l.into_affine());
+            rs.push(c_r.into_affine());
 
             let start = std::time::Instant::now();
             transcript.commit_point(&c_l)?; // L
@@ -237,7 +241,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
 
         let w = transcript.get_challenge();
 
-        let q = ipa_conf.q;
+        let q = ipa_conf.q.into_projective();
         let mut qw = q;
         qw.mul_assign(w);
         let mut qy = qw;
@@ -252,8 +256,8 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         // Compute expected commitment
         for (i, x) in challenges.iter().enumerate() {
             // println!("challenges_inv: {}/{}", i, challenges.len());
-            let l = proof.l[i];
-            let r = proof.r[i];
+            let l = proof.l[i].into_projective();
+            let r = proof.r[i].into_projective();
 
             let x_inv = x
                 .inverse()
@@ -266,7 +270,11 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
 
         // println!("challenges_inv: {}/{}", challenges.len(), challenges.len());
 
-        let mut current_basis = ipa_conf.srs.clone();
+        let mut current_basis = ipa_conf
+            .srs
+            .iter()
+            .map(|x| x.into_projective())
+            .collect::<Vec<_>>();
 
         println!("reduction starts");
         let start = std::time::Instant::now();

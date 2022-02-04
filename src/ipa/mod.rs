@@ -51,12 +51,12 @@ mod tests {
 
     use super::config::IpaConfig;
     use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-    use super::utils::read_point_le;
+    use super::utils::read_field_element_le;
     use super::Bn256Ipa;
 
     #[test]
     fn test_ipa_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
-        let point: Fs = read_point_le(&123456789u64.to_le_bytes()).unwrap();
+        let point: Fs = read_field_element_le(&123456789u64.to_le_bytes()).unwrap();
         let jubjub_params = &JubjubBn256::new();
         let ipa_conf = &IpaConfig::<Bn256>::new(jubjub_params);
 

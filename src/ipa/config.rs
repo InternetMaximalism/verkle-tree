@@ -2,7 +2,7 @@ use franklin_crypto::babyjubjub::{edwards::Point, JubjubEngine, Unknown};
 use franklin_crypto::babyjubjub::{FixedGenerators, JubjubParams};
 use franklin_crypto::bellman::{Field, PrimeField};
 
-use super::utils::{commit, generate_random_points, log2_ceil, read_point_le};
+use super::utils::{commit, generate_random_points, log2_ceil, read_field_element_le};
 
 pub const NUM_IPA_ROUNDS: usize = 8; // log_2(common.POLY_DEGREE);
 pub const DOMAIN_SIZE: usize = 256; // common.POLY_DEGREE;
@@ -18,7 +18,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
         element
     );
 
-    let domain_element_fr = read_point_le::<F>(&element.to_le_bytes()).unwrap();
+    let domain_element_fr = read_field_element_le::<F>(&element.to_le_bytes()).unwrap();
 
     let mut total = F::one();
 
@@ -27,7 +27,7 @@ pub fn compute_barycentric_weight_for_element<F: PrimeField>(element: usize) -> 
             continue;
         }
 
-        let i_fr = read_point_le::<F>(&i.to_le_bytes()).unwrap();
+        let i_fr = read_field_element_le::<F>(&i.to_le_bytes()).unwrap();
 
         let mut tmp = domain_element_fr;
         tmp.sub_assign(&i_fr);
@@ -69,7 +69,7 @@ impl<E: JubjubEngine> Default for PrecomputedWeights<E> {
         let midpoint = DOMAIN_SIZE - 1;
         let mut inverted_domain = vec![E::Fs::zero(); midpoint * 2];
         for i in 1..DOMAIN_SIZE {
-            let k = read_point_le::<E::Fs>(&i.to_le_bytes()).unwrap();
+            let k = read_field_element_le::<E::Fs>(&i.to_le_bytes()).unwrap();
             let k = k.inverse().unwrap();
 
             let mut negative_k = E::Fs::zero();
@@ -102,7 +102,7 @@ impl<E: JubjubEngine> PrecomputedWeights<E> {
         let mut total_prod = E::Fs::one();
         for i in 0..DOMAIN_SIZE {
             let weight = self.barycentric_weights[i];
-            let mut tmp: E::Fs = read_point_le(&i.to_le_bytes())?;
+            let mut tmp: E::Fs = read_field_element_le(&i.to_le_bytes())?;
             tmp.sub_assign(point);
             tmp.negate();
             total_prod.mul_assign(&tmp); // total_prod *= (point - i)

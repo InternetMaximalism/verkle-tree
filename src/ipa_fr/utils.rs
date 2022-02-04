@@ -48,7 +48,7 @@ pub fn test_log2_ceil() {
     assert_eq!(res5, 7);
 }
 
-pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
+pub fn read_field_element_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     let mut repr = F::Repr::default();
     let mut padded_bytes = bytes.to_vec();
     let num_bits = F::NUM_BITS as usize;
@@ -63,13 +63,13 @@ pub fn read_point_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     Ok(value)
 }
 
-pub fn read_point_be<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
+pub fn read_field_element_be<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     let mut padded_bytes = bytes.to_vec();
     padded_bytes.reverse();
-    read_point_le(&padded_bytes)
+    read_field_element_le(&padded_bytes)
 }
 
-pub fn write_point_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
+pub fn write_field_element_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
     let scalar_u64_vec = scalar.into_repr().as_ref().to_vec();
     let mut result = vec![0; scalar_u64_vec.len() * 8];
     for (bytes, tmp) in scalar_u64_vec
@@ -86,8 +86,8 @@ pub fn write_point_le<F: PrimeField>(scalar: &F) -> Vec<u8> {
     result
 }
 
-pub fn write_point_be<F: PrimeField>(scalar: &F) -> Vec<u8> {
-    let mut result = write_point_le(scalar);
+pub fn write_field_element_be<F: PrimeField>(scalar: &F) -> Vec<u8> {
+    let mut result = write_field_element_le(scalar);
     result.reverse();
 
     result
@@ -101,20 +101,20 @@ fn test_read_write_ff() {
         101u8, 121, 238, 208, 145, 118, 73, 126, 4, 129, 129, 133, 67, 167, 1, 64, 164, 189, 107,
         239, 228, 126, 238, 70, 205, 50, 174, 80, 238, 181, 137, 47,
     ];
-    let point = read_point_le::<Fr>(&bytes).unwrap();
+    let point = read_field_element_le::<Fr>(&bytes).unwrap();
     assert_eq!(
         format!("{:?}", point),
         "Fr(0x2f89b5ee50ae32cd46ee7ee4ef6bbda44001a743858181047e497691d0ee7965)"
     );
 
-    let recovered_bytes = write_point_le(&point);
+    let recovered_bytes = write_field_element_le(&point);
     assert_eq!(recovered_bytes, bytes);
 }
 
 // pub fn fr_to_fs_repr<E: JubjubEngine>(
 //   value: &E::Fr,
 // ) -> anyhow::Result<<E::Fs as PrimeField>::Repr> {
-//   let bytes = write_point_le(value);
+//   let bytes = write_field_element_le(value);
 //   let mut fs_repr = <E::Fs as PrimeField>::Repr::default();
 //   fs_repr.read_le::<&[u8]>(bytes.as_ref())?;
 
@@ -122,17 +122,19 @@ fn test_read_write_ff() {
 // }
 
 // pub fn fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs> {
-//   read_point_le(&write_point_le(value))
+//   read_field_element_le(&write_field_element_le(value))
 // }
 
-pub fn generate_random_points<G: CurveProjective>(num_points: usize) -> anyhow::Result<Vec<G>>
+pub fn generate_random_points<G: CurveProjective>(
+    num_points: usize,
+) -> anyhow::Result<Vec<G::Affine>>
 where
     <G::Affine as CurveAffine>::Base: PrimeField,
 {
     let mut hasher = Sha256::new();
     hasher.update(b"eth_verkle_oct_2021"); // In case it changes or needs updating, we can use eth_verkle_month_year.
     let digest = hasher.finalize();
-    let u = read_point_le::<<G::Affine as CurveAffine>::Base>(digest.as_ref())?;
+    let u = read_field_element_le::<<G::Affine as CurveAffine>::Base>(digest.as_ref())?;
 
     // flag to indicate whether we choose the lexicographically larger
     // element of `x` out of it and it's negative (?)
@@ -145,7 +147,7 @@ where
     // TODO: It takes too long to find some random points with the specific order.
     while points.len() != num_points {
         let mut x = u;
-        x.add_assign(&read_point_le(&increment.to_le_bytes()).unwrap()); // y = u + increment
+        x.add_assign(&read_field_element_le(&increment.to_le_bytes()).unwrap()); // y = u + increment
         increment += 1;
 
         let mut rhs = x;
@@ -161,9 +163,7 @@ where
             let is_positive = is_largest ^ (neg_y_repr < y_repr); // XOR
             let selected_y = if is_positive { y } else { neg_y };
 
-            let point_found = G::Affine::from_xy_checked(x, selected_y)
-                .unwrap()
-                .into_projective();
+            let point_found = G::Affine::from_xy_checked(x, selected_y).unwrap();
             points.push(point_found);
         }
     }
@@ -302,7 +302,7 @@ pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
 
     let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
     for polynomial_i in polynomial {
-        polynomial_fr.push(read_point_le(&polynomial_i.to_le_bytes()).unwrap());
+        polynomial_fr.push(read_field_element_le(&polynomial_i.to_le_bytes()).unwrap());
     }
 
     // for _ in n..DOMAIN_SIZE {

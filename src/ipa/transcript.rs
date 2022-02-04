@@ -7,7 +7,7 @@ use generic_array::typenum;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
 
-use super::utils::{read_point_le, write_point_le};
+use super::utils::{read_field_element_le, write_field_element_le};
 
 pub trait Bn256Transcript: Sized + Clone {
     type Params;
@@ -28,8 +28,8 @@ pub struct PoseidonBn256Transcript {
 fn test_fs_poseidon_hash() {
     let constants = PoseidonConstants::new();
     let mut preimage = vec![<Bn256Fs as ff::Field>::zero(); 2];
-    let input1: Fs = read_point_le(&[1]).unwrap();
-    let input2: Fs = read_point_le(&[2]).unwrap();
+    let input1: Fs = read_field_element_le(&[1]).unwrap();
+    let input2: Fs = read_field_element_le(&[2]).unwrap();
     preimage[0] = convert_ff_ce_to_ff(input1).unwrap();
     preimage[1] = convert_ff_ce_to_ff(input2).unwrap();
     let mut h = Poseidon::<Bn256Fs, typenum::U2>::new_with_preimage(&preimage, &constants);
@@ -64,8 +64,8 @@ impl Bn256Transcript for PoseidonBn256Transcript {
 
     fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()> {
         let (point_x, point_y) = point.into_xy();
-        let mut point_bytes = write_point_le(&point_x);
-        let mut point_y_bytes = write_point_le(&point_y);
+        let mut point_bytes = write_field_element_le(&point_x);
+        let mut point_y_bytes = write_field_element_le(&point_y);
         point_bytes.append(&mut point_y_bytes);
         self.commit_bytes(&point_bytes)?;
 
@@ -77,8 +77,6 @@ impl Bn256Transcript for PoseidonBn256Transcript {
     }
 
     fn get_challenge(&self) -> Fs {
-        
-
         convert_ff_to_ff_ce(self.state).unwrap()
     }
 }
@@ -88,7 +86,7 @@ impl PoseidonBn256Transcript {
         let chunk_size = (Fs::NUM_BITS / 8) as usize;
         assert!(chunk_size != 0);
         assert!(bytes.len() <= chunk_size);
-        let element = read_point_le::<Fs>(bytes).unwrap();
+        let element = read_field_element_le::<Fs>(bytes).unwrap();
 
         Self {
             state: convert_ff_ce_to_ff(element).unwrap(),
@@ -99,7 +97,7 @@ impl PoseidonBn256Transcript {
         let chunk_size = (Fs::NUM_BITS / 8) as usize;
         assert!(chunk_size != 0);
         for b in bytes.chunks(chunk_size) {
-            let element = read_point_le::<Fs>(b).unwrap();
+            let element = read_field_element_le::<Fs>(b).unwrap();
             self.commit_field_element(&element)?;
         }
 
@@ -140,9 +138,9 @@ fn test_read_write_ff_ce() {
 }
 
 pub fn convert_ff_to_ff_ce(value: Bn256Fs) -> anyhow::Result<Fs> {
-    read_point_le::<Fs>(&to_bytes_le(&value))
+    read_field_element_le::<Fs>(&to_bytes_le(&value))
 }
 
 pub fn convert_ff_ce_to_ff(value: Fs) -> anyhow::Result<Bn256Fs> {
-    from_bytes_le(&super::utils::write_point_le(&value))
+    from_bytes_le(&super::utils::write_field_element_le(&value))
 }
