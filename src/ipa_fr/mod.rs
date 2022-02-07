@@ -4,7 +4,7 @@ pub mod rns;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
+use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
 use self::config::IpaConfig;
@@ -22,7 +22,7 @@ pub trait Ipa<G: CurveProjective, T: Bn256Transcript> {
     ) -> anyhow::Result<IpaProof<G>>;
 
     fn check_proof(
-        commitment: G,
+        commitment: G::Affine,
         proof: IpaProof<G>,
         eval_point: <G as CurveProjective>::Scalar,
         inner_prod: <G as CurveProjective>::Scalar,
@@ -93,7 +93,7 @@ mod tests {
 
 impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
     fn create_proof(
-        commitment: <G1 as CurveProjective>::Affine,
+        commitment: G1Affine,
         a: &[Fr],
         eval_point: Fr,
         transcript_params: Fr,
@@ -124,7 +124,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         let ip = inner_prod(&a, &b)?;
 
         let start = std::time::Instant::now();
-        transcript.commit_point(&commitment.into_projective())?; // C
+        transcript.commit_point(&commitment)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
@@ -162,17 +162,17 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
 
             let start = std::time::Instant::now();
             let c_l_1 = commit(g_l, a_r)?;
-            let c_l = commit(&[c_l_1, qw], &[Fr::one(), z_l])?;
+            let c_l = commit(&[c_l_1, qw], &[Fr::one(), z_l])?.into_affine();
 
             let c_r_1 = commit(g_r, a_l)?;
-            let c_r = commit(&[c_r_1, qw], &[Fr::one(), z_r])?;
+            let c_r = commit(&[c_r_1, qw], &[Fr::one(), z_r])?.into_affine();
             println!(
                 "commit: {} s",
                 start.elapsed().as_micros() as f64 / 1000000.0
             );
 
-            ls.push(c_l.into_affine());
-            rs.push(c_r.into_affine());
+            ls.push(c_l);
+            rs.push(c_r);
 
             let start = std::time::Instant::now();
             transcript.commit_point(&c_l)?; // L
@@ -210,7 +210,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
     }
 
     fn check_proof(
-        commitment: G1,
+        commitment: G1Affine,
         proof: IpaProof<G1>,
         eval_point: Fr,
         ip: Fr, // inner_prod
@@ -251,7 +251,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         qw.mul_assign(w);
         let mut qy = qw;
         qy.mul_assign(ip);
-        let mut result_c = commitment;
+        let mut result_c = commitment.into_projective();
         result_c.add_assign(&qy);
 
         let challenges = generate_challenges(&proof, &mut transcript).unwrap();
