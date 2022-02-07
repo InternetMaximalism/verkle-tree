@@ -124,13 +124,13 @@ pub fn to_bytes_le<F: ff::PrimeField>(scalar: &F) -> Vec<u8> {
 #[test]
 fn test_read_write_ff_ce() {
     let bytes = [
-        101u8, 121, 238, 208, 145, 118, 73, 126, 4, 129, 129, 133, 67, 167, 1, 64, 164, 189, 107,
-        239, 228, 126, 238, 70, 205, 50, 174, 80, 238, 181, 137, 47,
+        206u8, 104, 6, 65, 140, 79, 39, 170, 187, 254, 154, 245, 57, 39, 73, 145, 82, 144, 26, 62,
+        229, 65, 168, 197, 168, 198, 162, 203, 73, 241, 49, 5,
     ];
     let point = from_bytes_le::<Bn256Fs>(&bytes).unwrap();
     assert_eq!(
         format!("{:?}", point),
-        "Bn256Fs(0x2f89b5ee50ae32cd46ee7ee4ef6bbda44001a743858181047e497691d0ee7965)"
+        "Bn256Fs(0x0531f149cba2c6a8c5a841e53e1a905291492739f59afebbaa274f8c410668ce)"
     );
 
     let recovered_bytes = to_bytes_le(&point);

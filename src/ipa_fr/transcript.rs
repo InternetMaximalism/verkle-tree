@@ -63,10 +63,10 @@ impl Bn256Transcript for PoseidonBn256Transcript {
 
     fn commit_point(&mut self, point: &<Bn256 as Engine>::G1) -> anyhow::Result<()> {
         let (point_x, point_y) = point.into_affine().into_xy_unchecked();
-        let mut point_bytes = write_field_element_le(&point_x);
-        let mut point_y_bytes = write_field_element_le(&point_y);
-        point_bytes.append(&mut point_y_bytes);
-        self.commit_bytes(&point_bytes)?;
+        let point_bytes_x = write_field_element_le(&point_x);
+        self.commit_bytes(&point_bytes_x)?;
+        let point_y_bytes = write_field_element_le(&point_y);
+        self.commit_bytes(&point_y_bytes)?;
 
         Ok(())
     }
@@ -129,7 +129,7 @@ fn test_read_write_ff_ce() {
     let point = from_bytes_le::<Bn256Fr>(&bytes).unwrap();
     assert_eq!(
         format!("{:?}", point),
-        "Bn256Fs(0x2f89b5ee50ae32cd46ee7ee4ef6bbda44001a743858181047e497691d0ee7965)"
+        "Bn256Fr(0x2f89b5ee50ae32cd46ee7ee4ef6bbda44001a743858181047e497691d0ee7965)"
     );
 
     let recovered_bytes = to_bytes_le(&point);

@@ -14,7 +14,8 @@ rand_core = "0.6"
 num = "0.4"
 hex = "0.4.3"
 serde = { version = "^1.0.101", features = ["derive"] }
-futures = {package = "futures", version = "0.3", default_features = false, features = ["executor", "thread-pool"]}
+anyhow = "1.0"
+thiserror = "1.0"
 num_cpus = "1"
 crossbeam = "0.7"
 

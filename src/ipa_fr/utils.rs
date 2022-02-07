@@ -2,9 +2,7 @@ use franklin_crypto::bellman::pairing::CurveAffine;
 use franklin_crypto::bellman::{CurveProjective, Field, PrimeField, PrimeFieldRepr, SqrtField};
 use sha2::{Digest, Sha256};
 
-use super::config::DOMAIN_SIZE;
-
-pub fn log2_ceil(value: usize) -> usize {
+pub fn log2_ceil(value: usize) -> u32 {
     assert!(value != 0, "The first argument must be a positive number.");
 
     if value == 1 {
@@ -292,15 +290,15 @@ where
     Ok(result)
 }
 
-pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
+pub fn test_poly<F: PrimeField>(polynomial: &[u64], domain_size: usize) -> Vec<F> {
     let n = polynomial.len();
     assert!(
-        n <= DOMAIN_SIZE,
+        n <= domain_size,
         "polynomial cannot exceed {} coefficients",
-        DOMAIN_SIZE
+        domain_size
     );
 
-    let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
+    let mut polynomial_fr = Vec::with_capacity(domain_size);
     for polynomial_i in polynomial {
         polynomial_fr.push(read_field_element_le(&polynomial_i.to_le_bytes()).unwrap());
     }
@@ -308,7 +306,7 @@ pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
     // for _ in n..DOMAIN_SIZE {
     //     polynomial_fr.push(F::zero());
     // }
-    polynomial_fr.resize(DOMAIN_SIZE, F::zero());
+    polynomial_fr.resize(domain_size, F::zero());
 
     polynomial_fr
 }
