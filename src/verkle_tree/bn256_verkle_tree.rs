@@ -1,15 +1,13 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
-use franklin_crypto::bellman::CurveProjective;
+use franklin_crypto::bellman::{CurveAffine, CurveProjective, PrimeField};
 // use franklin_crypto::bellman::Field;
 
 use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
 use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
-use super::proof::{
-    get_commitments_for_multi_proof, CommitmentElements, Elements, MultiProofCommitment,
-};
-use super::tree::VerkleNode;
+use super::proof::{CommitmentElements, Elements, MultiProofCommitment};
+use super::trie::{get_commitments_for_multi_proof, VerkleTree};
 
 #[derive(Clone)]
 pub struct VerkleProof<G: CurveProjective> {
@@ -17,17 +15,20 @@ pub struct VerkleProof<G: CurveProjective> {
     pub commitments: Vec<G::Affine>, // commitments, sorted by their path in the tree
     pub ext_status: Vec<usize>,      // the extension status of each stem
     pub poa_stems: Vec<Vec<u8>>,     // stems proving another stem is absent
-    pub keys: Vec<Vec<u8>>,
-    pub values: Vec<Vec<u8>>,
+    pub keys: Vec<[u8; 32]>,
+    pub values: Vec<[u8; 32]>,
 }
 
-pub trait VerkleTree<G: CurveProjective, T: Bn256Transcript, N: VerkleNode<G>> {
+pub trait VerkleTreeZkp<G: CurveProjective, T: Bn256Transcript>
+where
+    <G::Affine as CurveAffine>::Base: PrimeField,
+{
     type Err: Send + Sync + 'static;
 
     #[allow(clippy::type_complexity)]
     fn create_proof(
-        root: &N,
-        keys: &[N::Key],
+        tree: &VerkleTree<[u8; 32], G::Affine>,
+        keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G>,
     ) -> Result<(VerkleProof<G>, Elements<G::Scalar>), Self::Err>;
 
@@ -42,37 +43,40 @@ pub trait VerkleTree<G: CurveProjective, T: Bn256Transcript, N: VerkleNode<G>> {
 
 pub struct Bn256VerkleTree;
 
-impl<
-        Err: std::error::Error + Send + Sync + 'static,
-        N: VerkleNode<G1, Key = Vec<u8>, Value = Vec<u8>, Err = Err>,
-    > VerkleTree<G1, PoseidonBn256Transcript, N> for Bn256VerkleTree
-{
+impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
     type Err = anyhow::Error;
 
     fn create_proof(
-        root: &N,
-        keys: &[N::Key],
+        tree: &VerkleTree<[u8; 32], G1Affine>,
+        keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<(VerkleProof<G1>, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        root.compute_verkle_commitment()?;
+        // root.compute_verkle_commitment()?;
+        if tree.root.get_digest().is_none() {
+            anyhow::bail!(
+                "Please execute `root.compute_verkle_commitment()` before creating proof."
+            )
+        }
 
         let MultiProofCommitment {
             commitment_elements,
             ext_status,
             alt: poa_stems,
-        } = get_commitments_for_multi_proof(root, keys)?;
+        } = get_commitments_for_multi_proof(tree, keys)?;
 
         let CommitmentElements {
             commitments,
             elements,
         } = commitment_elements;
 
-        let mut values: Vec<Vec<u8>> = vec![];
+        let mut values: Vec<[u8; 32]> = vec![];
         for k in keys {
-            let val = root
-                .get(k.clone(), |x| x)
-                .map_err(|_| anyhow::anyhow!("key {:?} is not found in this tree", k))?;
+            let val = tree
+                .root
+                .get(k.to_vec())
+                .map_err(|_| anyhow::anyhow!("key {:?} is not found in this tree", k))?
+                .unwrap();
             values.push(val);
         }
 
