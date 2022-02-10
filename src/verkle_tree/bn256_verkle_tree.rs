@@ -9,7 +9,7 @@ use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use super::proof::{CommitmentElements, Elements, MultiProofCommitment};
 use super::trie::{get_commitments_for_multi_proof, VerkleTree};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
     pub multi_proof: MultiProof<G>,  // multipoint argument
     pub commitments: Vec<G::Affine>, // commitments, sorted by their path in the tree
@@ -27,14 +27,13 @@ where
 
     #[allow(clippy::type_complexity)]
     fn create_proof(
-        tree: &VerkleTree<[u8; 32], G::Affine>,
+        tree: &VerkleTree<G::Affine>,
         keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G>,
     ) -> Result<(VerkleProof<G>, Elements<G::Scalar>), Self::Err>;
 
     fn check_proof(
         proof: VerkleProof<G>,
-        commitments: &[G::Affine],
         zs: &[usize],
         ys: &[Fr],
         ipa_conf: &IpaConfig<G>,
@@ -47,16 +46,13 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
     type Err = anyhow::Error;
 
     fn create_proof(
-        tree: &VerkleTree<[u8; 32], G1Affine>,
+        tree: &VerkleTree<G1Affine>,
         keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<(VerkleProof<G1>, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        // root.compute_verkle_commitment()?;
         if tree.root.get_digest().is_none() {
-            anyhow::bail!(
-                "Please execute `root.compute_verkle_commitment()` before creating proof."
-            )
+            anyhow::bail!("Please execute `tree.compute_commitment()` before creating proof.")
         }
 
         let MultiProofCommitment {
@@ -101,7 +97,6 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
 
     fn check_proof(
         proof: VerkleProof<G1>,
-        commitments: &[G1Affine],
         zs: &[usize],
         ys: &[Fr],
         ipa_conf: &IpaConfig<G1>,
@@ -109,7 +104,7 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         Bn256BatchProof::check_proof(
             proof.multi_proof,
-            commitments,
+            &proof.commitments,
             ys,
             zs,
             transcript.into_params(),

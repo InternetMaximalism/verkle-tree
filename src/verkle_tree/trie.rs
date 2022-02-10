@@ -5,7 +5,7 @@ use crate::ipa_fr::{config::IpaConfig, utils::read_field_element_le};
 
 use super::{
     proof::{CommitmentElements, Elements, MultiProofCommitment, ProofCommitment},
-    utils::{equal_paths, fill_suffix_tree_poly, leaf_to_commitments, point_to_field_element},
+    utils::{fill_suffix_tree_poly, leaf_to_commitments, point_to_field_element},
 };
 
 pub enum ExtStatus {
@@ -39,8 +39,9 @@ pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
     fn encode(&self) -> Self::Path;
 }
 
+// 32 bytes key
 impl AbstractKey for [u8; 32] {
-    type Stem = Vec<u8>;
+    type Stem = Vec<u8>; // [u8; 31]
     type Path = Vec<u8>;
 
     fn into_stem(self) -> Vec<u8> {
@@ -52,16 +53,15 @@ impl AbstractKey for [u8; 32] {
     }
 }
 
+// 32 bytes value
 pub trait AbstractValue: Clone + Copy + Debug + PartialEq + Eq {}
 
 impl AbstractValue for [u8; 32] {}
 
 pub trait AbstractRelativePath: IntoIterator {
-    type Suffix: AbstractSuffix;
-
     fn get_branch(&self) -> usize;
 
-    fn get_suffix(&self) -> Self::Suffix;
+    fn get_suffix(&self) -> usize;
 
     /// Returns if `self` is a proper prefix of `full_path`.
     ///
@@ -72,14 +72,16 @@ pub trait AbstractRelativePath: IntoIterator {
 }
 
 impl AbstractRelativePath for Vec<u8> {
-    type Suffix = Self;
-
     fn get_branch(&self) -> usize {
         self[0] as usize
     }
 
-    fn get_suffix(&self) -> Self {
-        self[31..].to_vec()
+    fn get_suffix(&self) -> usize {
+        let mut suffix_bytes = self[31..].to_vec();
+        assert!(suffix_bytes.len() <= 8);
+        suffix_bytes.resize(8, 0u8);
+
+        usize::from_le_bytes(suffix_bytes.try_into().unwrap())
     }
 
     fn is_proper_prefix_of(&self, full_path: &Self) -> bool {
@@ -94,21 +96,6 @@ impl AbstractRelativePath for Vec<u8> {
         let base_path = full_path[..self.len()].to_vec();
 
         *self.clone() == base_path
-    }
-}
-
-pub trait AbstractSuffix {
-    fn to_usize(&self) -> usize;
-}
-
-impl AbstractSuffix for Vec<u8> {
-    fn to_usize(&self) -> usize {
-        assert!(self.len() <= 8);
-        let mut tmp = self.clone();
-        tmp.resize(8, 0u8);
-        let index_bytes: [u8; 8] = tmp.try_into().unwrap();
-
-        usize::from_le_bytes(index_bytes)
     }
 }
 
@@ -129,13 +116,13 @@ where
     V: AbstractValue,
     GA: CurveAffine,
 {
-    Empty {
-        key_fragments: K::Path,
-        key: K::Stem,
-        c1: Option<GA>,
-        c2: Option<GA>,
-        info: NodeInfo<GA>,
-    },
+    // Empty {
+    //     key_fragments: K::Path,
+    //     key: K::Stem,
+    //     c1: Option<GA>,
+    //     c2: Option<GA>,
+    //     info: NodeInfo<GA>,
+    // },
     Suffix {
         key_fragments: K::Path,
         key: K::Stem,
@@ -174,26 +161,55 @@ where
 
 impl<K, V, GA> TrieNode<K, V, GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
+    K: AbstractKey,
+    V: AbstractValue,
+    GA: CurveAffine,
+    GA::Base: PrimeField,
+{
+    pub fn get_key(&self) -> &K::Stem {
+        match self {
+            // Self::Empty { key, .. } => key,
+            Self::Suffix { key, .. } => key,
+            Self::Internal { key, .. } => key,
+        }
+    }
+
+    pub fn get_info(&self) -> &NodeInfo<GA> {
+        match self {
+            // Self::Empty { info, .. } => info,
+            Self::Suffix { info, .. } => info,
+            Self::Internal { info, .. } => info,
+        }
+    }
+
+    pub fn get_key_fragments(&self) -> &K::Path {
+        match self {
+            // Self::Empty { key_fragments, .. } => key_fragments,
+            Self::Suffix { key_fragments, .. } => key_fragments,
+            Self::Internal { key_fragments, .. } => key_fragments,
+        }
+    }
+
+    pub fn get_digest(&self) -> Option<GA::Scalar> {
+        self.get_info().digest
+    }
+}
+
+impl<U, K, V, GA> TrieNode<K, V, GA>
+where
+    U: PartialEq + Debug,
+    K: AbstractKey<Stem = Vec<U>, Path = Vec<U>>,
     V: AbstractValue,
     GA: CurveAffine,
     <GA as CurveAffine>::Base: PrimeField,
 {
-    pub fn assert_valid_key_fragments(&self) {
-        let width = 256usize;
-        let key_fragments = self.get_key_fragments();
-        // assert_eq!(key_fragments.len(), 1); // TODO: if InternalNode
-        for key_fragment in key_fragments.iter() {
-            assert!(width > *key_fragment as usize);
-        }
-    }
-
-    pub fn assert_valid_entry_key(&self) {
+    pub fn assert_valid_key(&self) {
         let key_fragments = &self.get_key_fragments()[..];
-        let fragments = self.get_key();
-        let depth = fragments.len();
-        let fragments_suffix = &fragments[(depth - key_fragments.len())..];
-        assert_eq!(fragments_suffix, key_fragments);
+        let stem = self.get_key();
+        let depth = stem.len();
+        println!("depth: {:?}", depth);
+        println!("key_fragments.len(): {:?}", key_fragments.len());
+        assert_eq!(key_fragments, &stem[(depth - key_fragments.len())..]);
     }
 }
 
@@ -204,10 +220,10 @@ where
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn new_leaf_node(key: K::Stem, key_fragments: K::Path) -> Self {
-        Self::Suffix {
+    pub fn new_leaf_node(key: K, key_fragments: K::Path) -> Self {
+        let node = Self::Suffix {
             key_fragments,
-            key,
+            key: key.into_stem(),
             values: Box::new([None; 256]),
             c1: None,
             c2: None,
@@ -216,7 +232,11 @@ where
                 commitment: None,
                 digest: None,
             },
-        }
+        };
+
+        node.assert_valid_key();
+
+        node
     }
 
     pub fn new_root_node() -> Self {
@@ -238,12 +258,20 @@ where
             },
         }
     }
+}
 
-    pub fn insert(&mut self, encoded_key: K::Path, key: K::Stem, value: V) -> anyhow::Result<()> {
+impl<K, V, GA> TrieNode<K, V, GA>
+where
+    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
+    V: AbstractValue,
+    GA: CurveAffine,
+    <GA as CurveAffine>::Base: PrimeField,
+{
+    pub fn insert(&mut self, encoded_key: K::Path, key: K, value: V) -> anyhow::Result<()> {
         match self {
-            Self::Empty { .. } => {
-                todo!();
-            }
+            // Self::Empty { .. } => {
+            //     todo!();
+            // }
             Self::Suffix {
                 key_fragments,
                 values,
@@ -259,7 +287,7 @@ where
 
                 let _ = commitment.take();
                 let _ = digest.take();
-                values[encoded_key.get_suffix().to_usize()] = Some(value);
+                values[encoded_key.get_suffix()] = Some(value);
             }
             Self::Internal {
                 key_fragments,
@@ -277,9 +305,10 @@ where
                 let _ = commitment.take();
                 let _ = digest.take();
                 if children[encoded_key.get_branch()].is_none() {
-                    let key_fragments = encoded_key[key_fragments.len()..].to_vec();
-                    children[encoded_key.get_branch()] =
-                        Some(TrieNode::new_leaf_node(key.clone(), key_fragments));
+                    children[encoded_key.get_branch()] = Some(TrieNode::new_leaf_node(
+                        key.clone(),
+                        encoded_key[key_fragments.len()..(encoded_key.len() - 1)].to_vec(),
+                    ));
                 }
 
                 match &mut children[encoded_key.get_branch()] {
@@ -299,29 +328,63 @@ where
     pub fn delete(&mut self, encoded_key: K::Path) -> anyhow::Result<()> {
         let key_fragments = self.get_key_fragments().clone();
         match self {
-            Self::Empty { .. } => {
-                anyhow::bail!("Cannot remove an entry from `EmptyNode`");
-            }
+            // Self::Empty { .. } => {
+            //     anyhow::bail!("Cannot remove an entry from `EmptyNode`");
+            // }
             Self::Suffix {
+                key: node_key,
                 values,
                 info: NodeInfo {
                     commitment, digest, ..
                 },
                 ..
             } => {
-                assert_eq!(encoded_key.len(), 1);
-
                 // Sanity check: ensure the key header is the same:
-                if !equal_paths(&encoded_key, &key_fragments) {
-                    anyhow::bail!("Delete non-existent key.");
+                if !key_fragments.is_proper_prefix_of(&encoded_key) {
+                    anyhow::bail!(
+                        "Delete non-existent key. key: {:?}, {:?}",
+                        node_key,
+                        encoded_key
+                    );
                 }
 
-                values[encoded_key.get_suffix().to_usize()] = None;
+                values[encoded_key.get_suffix()] = None;
                 let _ = commitment.take();
                 let _ = digest.take();
             }
-            Self::Internal { .. } => {
-                todo!();
+            Self::Internal {
+                key: node_key,
+                key_fragments,
+                children,
+                info: NodeInfo {
+                    commitment, digest, ..
+                },
+                ..
+            } => {
+                // Sanity check: ensure the key header is the same:
+                if !key_fragments.is_proper_prefix_of(&encoded_key) {
+                    anyhow::bail!(
+                        "Delete non-existent key. key: {:?}, {:?}",
+                        node_key,
+                        encoded_key
+                    );
+                }
+
+                let _ = commitment.take();
+                let _ = digest.take();
+
+                match &mut children[encoded_key.get_branch()] {
+                    Some(child) => {
+                        child.delete(encoded_key[key_fragments.len()..].to_vec())?;
+                    }
+                    None => {
+                        anyhow::bail!(
+                            "Delete non-existent key. key: {:?}, {:?}",
+                            node_key,
+                            encoded_key
+                        );
+                    }
+                }
             }
         }
 
@@ -331,25 +394,62 @@ where
     /// Get a value from this tree.
     pub fn get(&self, encoded_key: K::Path) -> anyhow::Result<Option<V>> {
         match &self {
-            Self::Empty { .. } => {
-                anyhow::bail!("unreachable code");
-            }
+            // Self::Empty { .. } => {
+            //     anyhow::bail!("unreachable code");
+            // }
             Self::Suffix {
                 values,
                 key_fragments,
                 ..
             } => {
-                assert_eq!(encoded_key.len(), 1);
-
                 // Sanity check: ensure the key header is the same:
-                if !equal_paths(&encoded_key, key_fragments) {
-                    Ok(None)
+                if key_fragments.is_proper_prefix_of(&encoded_key) {
+                    // let mut suffix = encoded_key.get_suffix();
+                    // let mut tmp = key_fragments.clone();
+                    // tmp.append(&mut suffix);
+                    // if cfg!(debug_assertions) {
+                    //     println!("encoded_key: {:?}", encoded_key);
+                    //     println!("key_fragments + suffix: {:?}", tmp);
+                    // }
+                    // if equal_paths(&encoded_key, &tmp) {
+                    return Ok(values[encoded_key.get_suffix()]);
+                    // } else {
+                    //     panic!(
+                    //         "There is an error in the key_fragments of the node whose key is {:?}.",
+                    //         encoded_key
+                    //     );
+                    // }
                 } else {
-                    Ok(values[encoded_key.get_suffix().to_usize()])
+                    todo!();
                 }
             }
-            Self::Internal { .. } => {
-                anyhow::bail!("unreachable code");
+            Self::Internal {
+                key: node_key,
+                key_fragments,
+                children,
+                ..
+            } => {
+                // Sanity check: ensure the key header is the same:
+                if !key_fragments.is_proper_prefix_of(&encoded_key) {
+                    anyhow::bail!(
+                        "Fetch non-existent key. key: {:?}, {:?}",
+                        node_key,
+                        encoded_key
+                    );
+                }
+
+                let result = match &children[encoded_key.get_branch()] {
+                    Some(child) => child.get(encoded_key[key_fragments.len()..].to_vec())?,
+                    None => {
+                        anyhow::bail!(
+                            "Fetch non-existent key. key: {:?}, {:?}",
+                            node_key,
+                            encoded_key
+                        );
+                    }
+                };
+
+                Ok(result)
             }
         }
     }
@@ -359,44 +459,45 @@ where
     /// If the entry exists, `witness` is the entry.
     /// If the entry does not exist,
     /// `witness` is an entry corresponding "the nearest" key to the given one.
-    pub fn get_witness(&self, _encoded_key: K::Path) -> anyhow::Result<(K::Path, V)> {
-        todo!();
-    }
-}
-
-impl<K, V, GA> TrieNode<K, V, GA>
-where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
-    V: AbstractValue,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
-{
-    pub fn get_key(&self) -> &K::Stem {
-        match self {
-            Self::Empty { key, .. } => key,
-            Self::Suffix { key, .. } => key,
-            Self::Internal { key, .. } => key,
+    pub fn get_witness(&self, encoded_key: K::Path) -> anyhow::Result<(K::Path, V)> {
+        match &self {
+            // Self::Empty { .. } => {
+            //     anyhow::bail!("unreachable code");
+            // }
+            Self::Suffix {
+                values,
+                key_fragments,
+                ..
+            } => {
+                // Sanity check: ensure the key header is the same:
+                if key_fragments.is_proper_prefix_of(&encoded_key) {
+                    // let mut suffix = encoded_key.get_suffix();
+                    // let mut tmp = key_fragments.clone();
+                    // tmp.append(&mut suffix);
+                    // if cfg!(debug_assertions) {
+                    //     println!("encoded_key: {:?}", encoded_key);
+                    //     println!("key_fragments + suffix: {:?}", tmp);
+                    // }
+                    // if equal_paths(&encoded_key, &tmp) {
+                    if let Some(value) = values[encoded_key.get_suffix()] {
+                        return Ok((encoded_key, value));
+                    } else {
+                        todo!();
+                    }
+                    // } else {
+                    //     panic!(
+                    //         "There is an error in the key_fragments of the node whose key is {:?}.",
+                    //         encoded_key
+                    //     );
+                    // }
+                } else {
+                    todo!();
+                }
+            }
+            Self::Internal { .. } => {
+                todo!();
+            }
         }
-    }
-
-    pub fn get_info(&self) -> &NodeInfo<GA> {
-        match self {
-            Self::Empty { info, .. } => info,
-            Self::Suffix { info, .. } => info,
-            Self::Internal { info, .. } => info,
-        }
-    }
-
-    pub fn get_key_fragments(&self) -> &K::Path {
-        match self {
-            Self::Empty { key_fragments, .. } => key_fragments,
-            Self::Suffix { key_fragments, .. } => key_fragments,
-            Self::Internal { key_fragments, .. } => key_fragments,
-        }
-    }
-
-    pub fn get_digest(&self) -> Option<GA::Scalar> {
-        self.get_info().digest
     }
 }
 
@@ -443,29 +544,29 @@ where
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn compute_commitment<C: Committer<GA>>(&mut self, _committer: &C) -> anyhow::Result<GA> {
+    pub fn compute_commitment<C: Committer<GA>>(&mut self, committer: &C) -> anyhow::Result<GA> {
         if let Some(commitment) = self.get_info().commitment {
             return Ok(commitment);
         }
 
         match self {
-            Self::Empty {
-                key,
-                c1,
-                c2,
-                info: NodeInfo {
-                    commitment, digest, ..
-                },
-                ..
-            } => {
-                let values = &mut Box::new([None; 256]);
-                let (tmp_c1, tmp_c2, tmp_commitment, tmp_digest) =
-                    compute_commitment_of_leaf::<K, _, _>(key, values, _committer)?;
-                let _ = std::mem::replace(c1, Some(tmp_c1));
-                let _ = std::mem::replace(c2, Some(tmp_c2));
-                let _ = std::mem::replace(commitment, Some(tmp_commitment));
-                let _ = std::mem::replace(digest, Some(tmp_digest));
-            }
+            // Self::Empty {
+            //     key,
+            //     c1,
+            //     c2,
+            //     info: NodeInfo {
+            //         commitment, digest, ..
+            //     },
+            //     ..
+            // } => {
+            //     let values = &mut Box::new([None; 256]);
+            //     let (tmp_c1, tmp_c2, tmp_commitment, tmp_digest) =
+            //         compute_commitment_of_leaf::<K, _, _>(key, values, _committer)?;
+            //     let _ = std::mem::replace(c1, Some(tmp_c1));
+            //     let _ = std::mem::replace(c2, Some(tmp_c2));
+            //     let _ = std::mem::replace(commitment, Some(tmp_commitment));
+            //     let _ = std::mem::replace(digest, Some(tmp_digest));
+            // }
             Self::Suffix {
                 key,
                 values,
@@ -477,37 +578,57 @@ where
                 ..
             } => {
                 let (tmp_c1, tmp_c2, tmp_commitment, tmp_digest) =
-                    compute_commitment_of_leaf::<K, _, _>(key, values, _committer)?;
+                    compute_commitment_of_leaf::<K, _, _>(key, values, committer)?;
                 let _ = std::mem::replace(c1, Some(tmp_c1));
                 let _ = std::mem::replace(c2, Some(tmp_c2));
                 let _ = std::mem::replace(commitment, Some(tmp_commitment));
                 let _ = std::mem::replace(digest, Some(tmp_digest));
+
+                return Ok(tmp_commitment);
             }
-            Self::Internal { children, .. } => {
+            Self::Internal {
+                children,
+                info: NodeInfo {
+                    commitment, digest, ..
+                },
+                ..
+            } => {
+                let mut children_digests = vec![];
                 for child in children.iter_mut() {
                     match child {
                         Some(x) => {
-                            x.compute_commitment(_committer)?;
+                            x.compute_commitment(committer)?;
+                            let digest = x.get_digest();
+                            children_digests.push(digest.unwrap());
                         }
-                        None => {}
+                        None => {
+                            children_digests.push(GA::Scalar::zero());
+                        }
                     }
                 }
-            }
-        }
 
-        if let Some(commitment) = self.get_info().commitment {
-            Ok(commitment)
-        } else {
-            panic!("unreachable code");
+                let tmp_commitment = committer
+                    .commit_to_poly(&children_digests, 0)
+                    .or_else(|_| anyhow::bail!("Fail to make a commitment of given polynomial."))?;
+                let tmp_digest = point_to_field_element(&tmp_commitment)?;
+
+                let _ = std::mem::replace(commitment, Some(tmp_commitment));
+                let _ = std::mem::replace(digest, Some(tmp_digest));
+
+                Ok(tmp_commitment)
+            }
         }
     }
 
-    pub fn get_commitments_along_path(&self, key: K) -> anyhow::Result<ProofCommitment<GA>> {
-        let encoded_key = key.encode();
+    pub fn get_commitments_along_path(
+        &self,
+        encoded_key: K::Path,
+        key: K,
+    ) -> anyhow::Result<ProofCommitment<GA>> {
         match self {
-            Self::Empty { .. } => {
-                anyhow::bail!("unreachable code");
-            }
+            // Self::Empty { .. } => {
+            //     anyhow::bail!("unreachable code");
+            // }
             Self::Suffix {
                 key_fragments,
                 values,
@@ -521,7 +642,7 @@ where
                 // Proof of absence: case of a differing stem.
                 //
                 // Return an unopened stem-level node.
-                if !equal_paths(&encoded_key, key_fragments) {
+                if !key_fragments.is_proper_prefix_of(&encoded_key) {
                     let mut poly = vec![GA::Scalar::zero(); 256];
                     poly[0] = GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
                     poly[1] = read_field_element_le(&stem)?;
@@ -543,7 +664,9 @@ where
                     });
                 }
 
-                let slot = stem.to_usize();
+                let slot = key.encode().get_suffix();
+                debug_assert!(slot < 256);
+
                 let suffix_slot = 2 + slot / 128;
                 let mut poly = vec![GA::Scalar::zero(); 256];
 
@@ -612,7 +735,7 @@ where
                                 ys: vec![
                                     ext_poly[0],
                                     ext_poly[1],
-                                    ext_poly[2 + slot / 128],
+                                    ext_poly[suffix_slot],
                                     GA::Scalar::zero(),
                                 ],
                                 fs: vec![ext_poly.clone(), ext_poly.clone(), ext_poly, poly],
@@ -657,26 +780,44 @@ where
                     alt: vec![], // None
                 })
             }
-            Self::Internal { .. } => {
-                anyhow::bail!("unreachable code");
+            Self::Internal {
+                key_fragments,
+                children,
+                ..
+            } => {
+                // Sanity check: ensure the key header is the same:
+                if !key_fragments.is_proper_prefix_of(&encoded_key) {
+                    anyhow::bail!("Fetch non-existent key. key: {:?}", key);
+                }
+
+                let result = match &children[encoded_key.get_branch()] {
+                    Some(child) => child.get_commitments_along_path(
+                        encoded_key[key_fragments.len()..].to_vec(),
+                        key,
+                    )?,
+                    None => {
+                        anyhow::bail!("Fetch non-existent key. key: {:?}", key);
+                    }
+                };
+
+                Ok(result)
             }
         }
     }
 }
 
-pub struct VerkleTree<K, GA>
+#[derive(Debug, PartialEq, Eq)]
+pub struct VerkleTree<GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub root: TrieNode<K, [u8; 32], GA>,
-    pub committer: IpaConfig<GA::Projective>,
+    pub root: TrieNode<[u8; 32], [u8; 32], GA>,
+    pub(crate) committer: IpaConfig<GA::Projective>,
 }
 
-impl<K, GA> Default for VerkleTree<K, GA>
+impl<GA> Default for VerkleTree<GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -688,27 +829,41 @@ where
     }
 }
 
-impl<K, GA> VerkleTree<K, GA>
+impl<GA> VerkleTree<GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
+    pub fn insert(&mut self, key: [u8; 32], value: [u8; 32]) -> anyhow::Result<()> {
+        self.root.insert(key.encode(), key, value)
+    }
+
+    pub fn delete(&mut self, key: [u8; 32]) -> anyhow::Result<()> {
+        let encoded_key = key.encode();
+
+        self.root.delete(encoded_key)
+    }
+
+    pub fn get(&self, key: [u8; 32]) -> anyhow::Result<Option<[u8; 32]>> {
+        let encoded_key = key.encode();
+
+        self.root.get(encoded_key)
+    }
+
     pub fn compute_commitment(&mut self) -> anyhow::Result<GA> {
         self.root.compute_commitment(&self.committer)
     }
 
-    pub fn get_commitments_along_path(&self, key: K) -> anyhow::Result<ProofCommitment<GA>> {
-        self.root.get_commitments_along_path(key)
+    pub fn get_commitments_along_path(&self, key: [u8; 32]) -> anyhow::Result<ProofCommitment<GA>> {
+        self.root.get_commitments_along_path(key.encode(), key)
     }
 }
 
-pub fn get_commitments_for_multi_proof<K, GA>(
-    tree: &VerkleTree<K, GA>,
-    keys: &[K],
+pub fn get_commitments_for_multi_proof<GA>(
+    tree: &VerkleTree<GA>,
+    keys: &[[u8; 32]],
 ) -> anyhow::Result<MultiProofCommitment<GA>>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
