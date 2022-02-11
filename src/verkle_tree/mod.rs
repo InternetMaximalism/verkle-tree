@@ -6,6 +6,7 @@ pub mod utils;
 #[cfg(test)]
 mod tests {
     use franklin_crypto::bellman::bn256::G1Affine;
+    use generic_array::typenum::U256;
 
     use crate::verkle_tree::{
         bn256_verkle_tree::{Bn256VerkleTree, VerkleTreeZkp},
@@ -14,7 +15,7 @@ mod tests {
 
     #[test]
     fn test_verkle_tree() {
-        let mut tree = VerkleTree::<G1Affine>::default();
+        let mut tree = VerkleTree::<U256, G1Affine>::default();
         let mut key = [0u8; 32];
         key[0] = 13;
         let mut value = [0u8; 32];
@@ -28,12 +29,16 @@ mod tests {
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
-        let proof = Bn256VerkleTree::create_proof(&tree, &[key], &tree.committer).unwrap();
-        println!("proof: {:?}", proof);
+        let proof = Bn256VerkleTree::<U256>::create_proof(&tree, &[key], &tree.committer).unwrap();
+        // println!("proof: {:?}", proof);
 
-        let success =
-            Bn256VerkleTree::check_proof(proof.0, &proof.1.zs, &proof.1.ys, &tree.committer)
-                .unwrap();
+        let success = Bn256VerkleTree::<U256>::check_proof(
+            proof.0,
+            &proof.1.zs,
+            &proof.1.ys,
+            &tree.committer,
+        )
+        .unwrap();
 
         assert!(
             success,

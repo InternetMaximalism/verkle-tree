@@ -1,5 +1,6 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, PrimeField};
+use generic_array::ArrayLength;
 // use franklin_crypto::bellman::Field;
 
 use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
@@ -7,7 +8,7 @@ use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
 use super::proof::{CommitmentElements, Elements, MultiProofCommitment};
-use super::trie::{get_commitments_for_multi_proof, VerkleTree};
+use super::trie::{get_commitments_for_multi_proof, TrieNode, VerkleTree};
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
@@ -19,15 +20,18 @@ pub struct VerkleProof<G: CurveProjective> {
     pub values: Vec<[u8; 32]>,
 }
 
-pub trait VerkleTreeZkp<G: CurveProjective, T: Bn256Transcript>
+pub trait VerkleTreeZkp<W, G, T>
 where
+    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, G::Affine>>>,
+    G: CurveProjective,
     <G::Affine as CurveAffine>::Base: PrimeField,
+    T: Bn256Transcript,
 {
     type Err: Send + Sync + 'static;
 
     #[allow(clippy::type_complexity)]
     fn create_proof(
-        tree: &VerkleTree<G::Affine>,
+        tree: &VerkleTree<W, G::Affine>,
         keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G>,
     ) -> Result<(VerkleProof<G>, Elements<G::Scalar>), Self::Err>;
@@ -40,13 +44,18 @@ where
     ) -> Result<bool, Self::Err>;
 }
 
-pub struct Bn256VerkleTree;
+pub struct Bn256VerkleTree<W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, G1Affine>>>> {
+    _width: std::marker::PhantomData<W>,
+}
 
-impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
+impl<W> VerkleTreeZkp<W, G1, PoseidonBn256Transcript> for Bn256VerkleTree<W>
+where
+    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, G1Affine>>>,
+{
     type Err = anyhow::Error;
 
     fn create_proof(
-        tree: &VerkleTree<G1Affine>,
+        tree: &VerkleTree<W, G1Affine>,
         keys: &[[u8; 32]],
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<(VerkleProof<G1>, Elements<Fr>)> {

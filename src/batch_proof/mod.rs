@@ -1,7 +1,6 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
-use crate::ipa::config::DOMAIN_SIZE;
 use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::proof::IpaProof;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
@@ -35,62 +34,61 @@ pub trait BatchProof<G: CurveProjective, T: Bn256Transcript> {
 
 pub struct Bn256BatchProof;
 
-// #[cfg(test)]
-// mod tests {
-//     use franklin_crypto::babyjubjub::JubjubBn256;
-//     use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
+#[cfg(test)]
+mod tests {
+    use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
 
-//     use super::{BatchProof, Bn256BatchProof};
-//     use crate::ipa::transcript::Bn256Transcript;
-//     use crate::ipa::{config::IpaConfig, transcript::PoseidonBn256Transcript, utils::test_poly};
+    use super::{BatchProof, Bn256BatchProof};
+    use crate::ipa_fr::transcript::Bn256Transcript;
+    use crate::ipa_fr::{config::IpaConfig, transcript::PoseidonBn256Transcript, utils::test_poly};
 
-//     #[test]
-//     fn test_multi_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
-//         // Shared View
-//         println!("create ipa_conf");
-//         let jubjub_params = &JubjubBn256::new();
-//         let ipa_conf = &IpaConfig::<G1>::new(jubjub_params);
+    #[test]
+    fn test_multi_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
+        // Shared View
+        println!("create ipa_conf");
+        let domain_size = 256;
+        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
 
-//         // Prover view
-//         let poly_1 = test_poly::<Fr>(&[12, 97, 37, 0, 1, 208, 132, 3]);
-//         let prover_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-//         let prover_commitment_1 = ipa_conf.commit(&poly_1, jubjub_params)?;
+        // Prover view
+        let poly_1 = test_poly::<Fr>(&[12, 97, 37, 0, 1, 208, 132, 3], domain_size);
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
+        let prover_commitment_1 = ipa_conf.commit(&poly_1)?;
 
-//         let commitments = vec![prover_commitment_1];
-//         let fs = vec![poly_1];
-//         let index_1 = 36;
-//         let zs = vec![index_1];
-//         let mut ys = vec![];
-//         for i in 0..zs.len() {
-//             let y_i = fs[i][zs[i]];
-//             ys.push(y_i);
-//         }
-//         let proof = Bn256BatchProof::create_proof(
-//             &commitments,
-//             &fs,
-//             &zs,
-//             prover_transcript.into_params(),
-//             ipa_conf,
-//         )?;
+        let commitments = vec![prover_commitment_1];
+        let fs = vec![poly_1];
+        let index_1 = 36;
+        let zs = vec![index_1];
+        let mut ys = vec![];
+        for i in 0..zs.len() {
+            let y_i = fs[i][zs[i]];
+            ys.push(y_i);
+        }
+        let proof = Bn256BatchProof::create_proof(
+            &commitments,
+            &fs,
+            &zs,
+            prover_transcript.into_params(),
+            ipa_conf,
+        )?;
 
-//         // test_serialize_deserialize_proof(proof);
+        // test_serialize_deserialize_proof(proof);
 
-//         // Verifier view
-//         let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-//         let success = Bn256BatchProof::check_proof(
-//             proof,
-//             &commitments,
-//             &ys,
-//             &zs,
-//             verifier_transcript.into_params(),
-//             ipa_conf,
-//         )?;
+        // Verifier view
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
+        let success = Bn256BatchProof::check_proof(
+            proof,
+            &commitments,
+            &ys,
+            &zs,
+            verifier_transcript.into_params(),
+            ipa_conf,
+        )?;
 
-//         assert!(success, "inner product proof failed");
+        assert!(success, "inner product proof failed");
 
-//         Ok(())
-//     }
-// }
+        Ok(())
+    }
+}
 
 impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
     fn create_proof(
@@ -124,10 +122,11 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             anyhow::anyhow!("cannot create a batch proof with no data");
         }
 
+        let domain_size = 2usize.pow(ipa_conf.precomputed_weights.num_ipa_rounds);
         for i in 0..num_queries {
             transcript.commit_point(&commitments[i])?; // C
 
-            assert!(zs[i] < DOMAIN_SIZE);
+            assert!(zs[i] < domain_size);
             transcript.commit_bytes(&zs[i].to_le_bytes())?;
 
             // get the `y` value
@@ -140,12 +139,12 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
                                             // println!("r: {:?}", r);
 
         // Compute g(X)
-        let mut g_x = vec![Fr::zero(); DOMAIN_SIZE];
+        let mut g_x = vec![Fr::zero(); domain_size];
         let mut powers_of_r = Fr::one(); // powers_of_r = 1
         for i in 0..num_queries {
             let quotient = ipa_conf.precomputed_weights.divide_on_domain(zs[i], &fs[i]); // quotient[j] = (f_i(j) - f_i(zs[i])) / (j - zs[i])
 
-            for j in 0..DOMAIN_SIZE {
+            for j in 0..domain_size {
                 let mut tmp = quotient[j];
                 tmp.mul_assign(&powers_of_r);
                 g_x[j].add_assign(&tmp); // g_x[j] += r^i * quotient[j]
@@ -162,7 +161,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
                                             // println!("t: {:?}", t);
 
         // Compute h(X) = g_1(X)
-        let mut h_x = vec![Fr::zero(); DOMAIN_SIZE];
+        let mut h_x = vec![Fr::zero(); domain_size];
         let mut powers_of_r = Fr::one(); // powers_of_r = 1
         for i in 0..num_queries {
             let z_i = read_field_element_le::<Fr>(&zs[i].to_le_bytes()).unwrap();
@@ -182,8 +181,8 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             powers_of_r.mul_assign(&r); // powers_of_r *= r
         }
 
-        let mut h_minus_g = vec![Fr::zero(); DOMAIN_SIZE];
-        for i in 0..DOMAIN_SIZE {
+        let mut h_minus_g = vec![Fr::zero(); domain_size];
+        for i in 0..domain_size {
             h_minus_g[i] = h_x[i];
             h_minus_g[i].sub_assign(&g_x[i]);
         }
@@ -246,8 +245,9 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         }
 
         println!("update transcript");
+        let domain_size = 2usize.pow(ipa_conf.precomputed_weights.num_ipa_rounds);
         for i in 0..num_queries {
-            assert!(zs[i] < DOMAIN_SIZE);
+            assert!(zs[i] < domain_size);
             let start = std::time::Instant::now();
             transcript.commit_point(&commitments[i])?;
             println!(
@@ -319,7 +319,6 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         transcript.commit_point(&e.into_affine())?;
 
         let mut e_minus_d = e;
-        e.sub_assign(&G1::one()); // XXX: Pass the verification even if a bug exists.
         e_minus_d.sub_assign(&proof.d.into_projective());
 
         let transcript_params = transcript.get_challenge();
