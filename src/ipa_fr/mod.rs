@@ -37,7 +37,7 @@ pub struct Bn256Ipa;
 mod tests {
     use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
 
-    use super::config::IpaConfig;
+    use super::config::{Committer, IpaConfig};
     use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
     use super::utils::{inner_prod, read_field_element_le, test_poly};
     use super::{Bn256Ipa, Ipa};

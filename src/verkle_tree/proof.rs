@@ -1,5 +1,7 @@
 use franklin_crypto::bellman::{CurveAffine, PrimeField, SqrtField};
 
+use super::trie::AbstractKey;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Elements<F: PrimeField + SqrtField> {
     pub zs: Vec<usize>,
@@ -48,15 +50,19 @@ impl<GA: CurveAffine> CommitmentElements<GA> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProofCommitment<GA: CurveAffine> {
-    pub commitment_elements: CommitmentElements<GA>,
-    pub ext_status: usize,
-    pub alt: Vec<u8>,
+pub struct ExtraProofData<K: AbstractKey> {
+    pub ext_status: usize,  // the extension status of each stem
+    pub poa_stems: K::Stem, // stems proving another stem is absent
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MultiProofCommitment<GA: CurveAffine> {
+pub struct ProofCommitments<K: AbstractKey, GA: CurveAffine> {
     pub commitment_elements: CommitmentElements<GA>,
-    pub ext_status: Vec<usize>,
-    pub alt: Vec<Vec<u8>>,
+    pub extra_data: ExtraProofData<K>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultiProofCommitments<K: AbstractKey, GA: CurveAffine> {
+    pub commitment_elements: CommitmentElements<GA>,
+    pub extra_data_list: Vec<ExtraProofData<K>>,
 }

@@ -220,8 +220,16 @@ where
     }
 }
 
-impl<G: CurveProjective> IpaConfig<G> {
-    pub fn commit(
+pub trait Committer<GA: CurveAffine> {
+    type Err: Send + Sync + 'static;
+
+    fn commit(&self, polynomial: &[GA::Scalar]) -> Result<GA, Self::Err>;
+}
+
+impl<G: CurveProjective> Committer<G::Affine> for IpaConfig<G> {
+    type Err = anyhow::Error;
+
+    fn commit(
         &self,
         polynomial: &[<G::Affine as CurveAffine>::Scalar],
     ) -> anyhow::Result<G::Affine> {

@@ -1,7 +1,7 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
-use crate::ipa_fr::config::IpaConfig;
+use crate::ipa_fr::config::{Committer, IpaConfig};
 use crate::ipa_fr::proof::IpaProof;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa_fr::utils::read_field_element_le;
@@ -39,6 +39,7 @@ mod tests {
     use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
 
     use super::{BatchProof, Bn256BatchProof};
+    use crate::ipa_fr::config::Committer;
     use crate::ipa_fr::transcript::Bn256Transcript;
     use crate::ipa_fr::{config::IpaConfig, transcript::PoseidonBn256Transcript, utils::test_poly};
 

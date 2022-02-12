@@ -1,13 +1,15 @@
 use core::fmt::Debug;
 use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
-use generic_array::{ArrayLength, GenericArray};
 
-use crate::ipa_fr::{config::IpaConfig, utils::read_field_element_le};
+use crate::ipa_fr::config::{Committer, IpaConfig};
+use crate::ipa_fr::utils::read_field_element_le;
+use crate::verkle_tree::proof::ExtraProofData;
 
-use super::{
-    proof::{CommitmentElements, Elements, MultiProofCommitment, ProofCommitment},
-    utils::{fill_suffix_tree_poly, leaf_to_commitments, point_to_field_element},
-};
+use super::path::TreePath;
+use super::proof::{CommitmentElements, Elements, ProofCommitments};
+use super::utils::{fill_suffix_tree_poly, leaf_to_commitments, point_to_field_element};
+
+const WIDTH: usize = 256;
 
 pub enum ExtStatus {
     AbsentEmpty, // path led to a node with a different stem
@@ -15,25 +17,23 @@ pub enum ExtStatus {
     Present,     // stem was present
 }
 
-pub trait Committer<GA: CurveAffine> {
-    type Err: Send + Sync + 'static;
+// pub trait Committer<GA: CurveAffine> {
+//     type Err: Send + Sync + 'static;
 
-    fn commit_to_poly(&self, polynomial: &[GA::Scalar], a: usize) -> Result<GA, Self::Err>;
-}
+//     fn commit(&self, polynomial: &[GA::Scalar], a: usize) -> Result<GA, Self::Err>;
+// }
 
-impl<GA: CurveAffine> Committer<GA> for IpaConfig<GA::Projective> {
-    type Err = anyhow::Error;
+// impl<GA: CurveAffine> Committer<GA> for IpaConfig<GA::Projective> {
+//     type Err = anyhow::Error;
 
-    fn commit_to_poly(&self, polynomial: &[GA::Scalar], _: usize) -> anyhow::Result<GA> {
-        let result = self.commit(polynomial)?;
-
-        Ok(result)
-    }
-}
+//     fn commit(&self, polynomial: &[GA::Scalar], _: usize) -> Result<GA, Self::Err> {
+//         self.commit(polynomial)
+//     }
+// }
 
 pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
-    type Stem: AbstractAbsolutePath;
-    type Path: AbstractRelativePath;
+    type Stem: AbstractAbsolutePath + Default + Debug;
+    type Path: AbstractRelativePath + Debug;
 
     fn into_stem(self) -> Self::Stem;
 
@@ -42,15 +42,17 @@ pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
 
 // 32 bytes key
 impl AbstractKey for [u8; 32] {
-    type Stem = Vec<u8>; // [u8; 31]
-    type Path = Vec<u8>;
+    type Stem = Option<[u8; 31]>; // Option<[u8; 31]>
+    type Path = TreePath;
 
-    fn into_stem(self) -> Vec<u8> {
-        self[..31].to_vec()
+    fn into_stem(self) -> Option<[u8; 31]> {
+        let result: [u8; 31] = self[..31].to_vec().try_into().unwrap();
+
+        Some(result)
     }
 
-    fn encode(&self) -> Vec<u8> {
-        self.to_vec()
+    fn encode(&self) -> TreePath {
+        TreePath::from(self.to_vec())
     }
 }
 
@@ -59,7 +61,19 @@ pub trait AbstractValue: Clone + Copy + Debug + PartialEq + Eq {}
 
 impl AbstractValue for [u8; 32] {}
 
-pub trait AbstractRelativePath: IntoIterator {
+pub trait IntoBytes {
+    fn into_bytes(self) -> Vec<u8>;
+}
+
+impl IntoBytes for TreePath {
+    fn into_bytes(self) -> Vec<u8> {
+        self.inner
+    }
+}
+
+pub trait AbstractRelativePath: Sized + PartialEq + Eq + IntoIterator {
+    type RemovePrefixError: Send + Sync + 'static;
+
     fn get_branch(&self) -> usize;
 
     fn get_suffix(&self) -> usize;
@@ -70,9 +84,13 @@ pub trait AbstractRelativePath: IntoIterator {
     ///
     /// If `self` is equal to `full_path`, this function returns `false`.
     fn is_proper_prefix_of(&self, full_path: &Self) -> bool;
+
+    fn remove_prefix(&self, prefix: &Self) -> Result<Self, Self::RemovePrefixError>;
 }
 
-impl AbstractRelativePath for Vec<u8> {
+impl AbstractRelativePath for TreePath {
+    type RemovePrefixError = anyhow::Error;
+
     fn get_branch(&self) -> usize {
         self[0] as usize
     }
@@ -96,26 +114,60 @@ impl AbstractRelativePath for Vec<u8> {
 
         let base_path = full_path[..self.len()].to_vec();
 
-        *self.clone() == base_path
+        self.inner == base_path
+    }
+
+    fn remove_prefix(&self, prefix: &Self) -> anyhow::Result<Self> {
+        if !prefix.is_proper_prefix_of(self) {
+            anyhow::bail!(
+                "{:?} is not proper prefix of {:?}",
+                prefix.inner,
+                self.inner,
+            );
+        }
+
+        let result = Self::from(&self[prefix.len()..]);
+
+        Ok(result)
     }
 }
 
-pub trait AbstractAbsolutePath {
+pub trait AbstractAbsolutePath: Clone + PartialEq + Eq + IntoBytes {
+    type Path: AbstractRelativePath;
+
     fn get_depth(&self) -> usize;
+
+    fn to_path(&self) -> Self::Path;
 }
 
-impl AbstractAbsolutePath for Vec<u8> {
+impl IntoBytes for Option<[u8; 31]> {
+    fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Some(inner) => inner.to_vec(),
+            None => vec![],
+        }
+    }
+}
+
+impl AbstractAbsolutePath for Option<[u8; 31]> {
+    type Path = TreePath;
+
     fn get_depth(&self) -> usize {
-        self.len()
+        self.into_bytes().len()
+    }
+
+    fn to_path(&self) -> TreePath {
+        TreePath {
+            inner: self.into_bytes(),
+        }
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TrieNode<K, V, W, GA>
+pub enum VerkleNode<K, V, GA>
 where
     K: AbstractKey,
     V: AbstractValue,
-    W: ArrayLength<Option<TrieNode<K, V, W, GA>>>,
     GA: CurveAffine,
 {
     // Empty {
@@ -128,14 +180,14 @@ where
     Suffix {
         key_fragments: K::Path,
         key: K::Stem,
-        leaves: Box<Vec<Option<V>>>,
+        leaves: Box<[Option<V>; WIDTH]>,
         s_commitments: Option<Vec<GA>>,
         info: NodeInfo<GA>,
     },
     Internal {
         key_fragments: K::Path,
-        key: K::Stem,
-        children: Box<GenericArray<Option<TrieNode<K, V, W, GA>>, W>>,
+        key: K::Path,
+        children: Box<[Option<VerkleNode<K, V, GA>>; WIDTH]>,
         info: NodeInfo<GA>,
     },
 }
@@ -160,21 +212,20 @@ where
     pub(crate) digest: Option<GA::Scalar>,
 }
 
-impl<K, V, W, GA> TrieNode<K, V, W, GA>
+impl<K, V, GA> VerkleNode<K, V, GA>
 where
     K: AbstractKey,
     V: AbstractValue,
-    W: ArrayLength<Option<TrieNode<K, V, W, GA>>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn get_key(&self) -> &K::Stem {
-        match self {
-            // Self::Empty { key, .. } => key,
-            Self::Suffix { key, .. } => key,
-            Self::Internal { key, .. } => key,
-        }
-    }
+    // pub fn get_key(&self) -> &K::Path {
+    //     match self {
+    //         // Self::Empty { key, .. } => key,
+    //         Self::Suffix { key, .. } => key,
+    //         Self::Internal { key, .. } => key,
+    //     }
+    // }
 
     pub fn get_info(&self) -> &NodeInfo<GA> {
         match self {
@@ -197,30 +248,34 @@ where
     }
 }
 
-impl<U, K, V, W, GA> TrieNode<K, V, W, GA>
+impl<K, V, GA> VerkleNode<K, V, GA>
 where
-    U: PartialEq + Debug,
-    K: AbstractKey<Stem = Vec<U>, Path = Vec<U>>,
+    K: AbstractKey<Stem = Option<[u8; 31]>, Path = TreePath>,
     V: AbstractValue,
-    W: ArrayLength<Option<TrieNode<K, V, W, GA>>>,
     GA: CurveAffine,
     <GA as CurveAffine>::Base: PrimeField,
 {
-    pub fn assert_valid_key(&self) {
-        let key_fragments = &self.get_key_fragments()[..];
-        let stem = self.get_key();
-        let depth = stem.len();
-        println!("depth: {:?}", depth);
-        println!("key_fragments.len(): {:?}", key_fragments.len());
-        assert_eq!(key_fragments, &stem[(depth - key_fragments.len())..]);
+    pub fn assert_valid_stem(&self) {
+        match self {
+            VerkleNode::Suffix { key: stem, .. } => {
+                let key_fragments = &self.get_key_fragments()[..];
+                let depth = stem.get_depth();
+                println!("depth: {:?}", depth);
+                println!("key_fragments.len(): {:?}", key_fragments.len());
+                assert_eq!(
+                    key_fragments,
+                    &stem.into_bytes()[(depth - key_fragments.len())..]
+                );
+            }
+            VerkleNode::Internal { .. } => {}
+        }
     }
 }
 
-impl<K, V, W, GA> TrieNode<K, V, W, GA>
+impl<K, V, GA> VerkleNode<K, V, GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
+    K: AbstractKey<Stem = Option<[u8; 31]>, Path = TreePath>,
     V: AbstractValue,
-    W: ArrayLength<Option<TrieNode<K, V, W, GA>>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -228,7 +283,7 @@ where
         let node = Self::Suffix {
             key_fragments,
             key: key.into_stem(),
-            leaves: Box::new(vec![None; W::to_usize()]),
+            leaves: Box::new([None; WIDTH]),
             s_commitments: None,
             info: NodeInfo {
                 num_nonempty_children: 0,
@@ -237,17 +292,21 @@ where
             },
         };
 
-        node.assert_valid_key();
+        node.assert_valid_stem();
 
         node
     }
 
     pub fn new_root_node() -> Self {
-        let children = Box::new(GenericArray::default());
+        let mut children = vec![];
+        for _ in 0..WIDTH {
+            children.push(None);
+        }
 
+        let children = Box::new(children.try_into().unwrap()); // = [None; WIDTH]
         Self::Internal {
-            key_fragments: vec![],
-            key: vec![],
+            key_fragments: TreePath::default(),
+            key: K::Path::default(),
             children,
             info: NodeInfo {
                 num_nonempty_children: 0,
@@ -258,11 +317,10 @@ where
     }
 }
 
-impl<K, V, W, GA> TrieNode<K, V, W, GA>
+impl<K, V, GA> VerkleNode<K, V, GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
+    K: AbstractKey<Stem = Option<[u8; 31]>, Path = TreePath>,
     V: AbstractValue,
-    W: ArrayLength<Option<TrieNode<K, V, W, GA>>>,
     GA: CurveAffine,
     <GA as CurveAffine>::Base: PrimeField,
 {
@@ -304,15 +362,21 @@ where
                 let _ = commitment.take();
                 let _ = digest.take();
                 if children[encoded_key.get_branch()].is_none() {
-                    children[encoded_key.get_branch()] = Some(TrieNode::new_leaf_node(
+                    children[encoded_key.get_branch()] = Some(VerkleNode::new_leaf_node(
                         key.clone(),
-                        encoded_key[key_fragments.len()..(encoded_key.len() - 1)].to_vec(),
+                        TreePath::from(
+                            encoded_key[key_fragments.len()..(encoded_key.len() - 1)].to_vec(),
+                        ),
                     ));
                 }
 
                 match &mut children[encoded_key.get_branch()] {
                     Some(child) => {
-                        child.insert(encoded_key[key_fragments.len()..].to_vec(), key, value)?;
+                        child.insert(
+                            TreePath::from(encoded_key[key_fragments.len()..].to_vec()),
+                            key,
+                            value,
+                        )?;
                     }
                     None => {
                         panic!("unreachable code");
@@ -374,7 +438,7 @@ where
 
                 match &mut children[encoded_key.get_branch()] {
                     Some(child) => {
-                        child.delete(encoded_key[key_fragments.len()..].to_vec())?;
+                        child.delete(TreePath::from(&encoded_key[key_fragments.len()..]))?;
                     }
                     None => {
                         anyhow::bail!(
@@ -391,7 +455,7 @@ where
     }
 
     /// Get a value from this tree.
-    pub fn get(&self, encoded_key: K::Path) -> anyhow::Result<Option<V>> {
+    pub fn get_value(&self, encoded_key: K::Path) -> anyhow::Result<Option<V>> {
         match &self {
             // Self::Empty { .. } => {
             //     anyhow::bail!("unreachable code");
@@ -411,13 +475,14 @@ where
                     //     println!("key_fragments + suffix: {:?}", tmp);
                     // }
                     // if equal_paths(&encoded_key, &tmp) {
+                    //     return Ok(leaves[encoded_key.get_suffix()]);
+                    // } else {
+                    //     panic!(
+                    //         "There is an error in the key_fragments of the node whose key is {:?}.",
+                    //         encoded_key
+                    //     );
+                    // }
                     return Ok(leaves[encoded_key.get_suffix()]); // TODO: Is this correct?
-                                                                 // } else {
-                                                                 //     panic!(
-                                                                 //         "There is an error in the key_fragments of the node whose key is {:?}.",
-                                                                 //         encoded_key
-                                                                 //     );
-                                                                 // }
                 } else {
                     todo!();
                 }
@@ -438,7 +503,9 @@ where
                 }
 
                 let result = match &children[encoded_key.get_branch()] {
-                    Some(child) => child.get(encoded_key[key_fragments.len()..].to_vec())?,
+                    Some(child) => {
+                        child.get_value(TreePath::from(&encoded_key[key_fragments.len()..]))?
+                    }
                     None => {
                         anyhow::bail!(
                             "Fetch non-existent key. key: {:?}, {:?}",
@@ -500,34 +567,39 @@ where
     }
 }
 
-fn compute_commitment_of_leaf<K, W, GA, C>(
+// impl IntoBytes for String {
+//     fn into_bytes(self: String) -> Vec<u8> {
+//         self.into_bytes()
+//     }
+// }
+
+fn compute_commitment_of_leaf<K, GA, C>(
     stem: &mut K::Stem,
-    leaves: &mut Box<Vec<Option<[u8; 32]>>>,
+    leaves: &mut Box<[Option<[u8; 32]>; WIDTH]>,
     committer: &C,
 ) -> anyhow::Result<(Vec<GA>, GA, GA::Scalar)>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
-    W: ArrayLength<Option<TrieNode<K, [u8; 32], W, GA>>>,
+    K: AbstractKey,
     GA: CurveAffine,
     GA::Base: PrimeField,
     C: Committer<GA>,
 {
-    let domain_size = W::to_usize();
+    let domain_size = WIDTH;
     let value_size = 32;
     let limbs = 2;
-    let limb_bits_size = value_size * 8 / limbs; // TODO: Is this correct? (If `domain_size` is 256, this is correct.)
+    let limb_bits_size = value_size * 8 / limbs;
     debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
 
     let poly_0 = GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
-    let poly_1 = read_field_element_le::<GA::Scalar>(stem)?;
+    let poly_1 = read_field_element_le::<GA::Scalar>(&stem.clone().into_bytes())?;
     let mut poly = vec![poly_0, poly_1];
 
     let mut s_commitments = vec![];
     for limb in leaves.chunks(limb_bits_size) {
         let mut sub_poly = vec![GA::Scalar::zero(); domain_size];
-        let count = fill_suffix_tree_poly(&mut sub_poly, &limb)?;
+        let _count = fill_suffix_tree_poly(&mut sub_poly, &limb)?;
         let tmp_s_commitment = committer
-            .commit_to_poly(&sub_poly, domain_size - count)
+            .commit(&sub_poly /* , domain_size - count */)
             .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
         s_commitments.push(tmp_s_commitment);
         poly.push(point_to_field_element(&tmp_s_commitment)?);
@@ -536,17 +608,16 @@ where
     poly.resize(domain_size, GA::Scalar::zero());
 
     let tmp_commitment = committer
-        .commit_to_poly(&poly, domain_size - (2 + limbs))
+        .commit(&poly /* , domain_size - (2 + limbs) */)
         .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
     let tmp_digest = point_to_field_element(&tmp_commitment)?;
 
     Ok((s_commitments, tmp_commitment, tmp_digest))
 }
 
-impl<K, W, GA> TrieNode<K, [u8; 32], W, GA>
+impl<K, GA> VerkleNode<K, [u8; 32], GA>
 where
-    K: AbstractKey<Stem = Vec<u8>, Path = Vec<u8>>,
-    W: ArrayLength<Option<TrieNode<K, [u8; 32], W, GA>>>,
+    K: AbstractKey,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -565,7 +636,7 @@ where
             //     },
             //     ..
             // } => {
-            //     let values = &mut Box::new([None; W::to_usize()]);
+            //     let values = &mut Box::new([None; WIDTH]);
             //     let (tmp_c1, tmp_c2, tmp_commitment, tmp_digest) =
             //         compute_commitment_of_leaf::<K, _, _>(key, values, _committer)?;
             //     let _ = std::mem::replace(c1, Some(tmp_c1));
@@ -583,7 +654,7 @@ where
                 ..
             } => {
                 let (tmp_s_commitments, tmp_commitment, tmp_digest) =
-                    compute_commitment_of_leaf::<K, W, _, _>(key, leaves, committer)?;
+                    compute_commitment_of_leaf::<K, _, _>(key, leaves, committer)?;
                 let _ = std::mem::replace(s_commitments, Some(tmp_s_commitments));
                 let _ = std::mem::replace(commitment, Some(tmp_commitment));
                 let _ = std::mem::replace(digest, Some(tmp_digest));
@@ -612,7 +683,7 @@ where
                 }
 
                 let tmp_commitment = committer
-                    .commit_to_poly(&children_digests, 0)
+                    .commit(&children_digests /* , 0 */)
                     .or_else(|_| anyhow::bail!("Fail to make a commitment of given polynomial."))?;
                 let tmp_digest = point_to_field_element(&tmp_commitment)?;
 
@@ -628,25 +699,24 @@ where
         &self,
         encoded_key: K::Path,
         key: K,
-    ) -> anyhow::Result<ProofCommitment<GA>> {
+    ) -> anyhow::Result<ProofCommitments<K, GA>> {
         match self {
             // Self::Empty { .. } => {
             //     anyhow::bail!("unreachable code");
             // }
             Self::Suffix {
                 key_fragments,
+                key: stem,
                 leaves,
                 s_commitments,
                 info: NodeInfo { commitment, .. },
                 ..
             } => {
-                let domain_size = W::to_usize();
+                let domain_size = WIDTH;
                 let value_size = 32;
                 let limbs = 2;
                 let limb_bits_size = value_size * 8 / limbs;
                 debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
-
-                let stem = key.into_stem();
 
                 let tmp_s_commitments = s_commitments
                     .clone()
@@ -655,15 +725,16 @@ where
                     .clone()
                     .expect("Need to execute `compute commitment` in advance");
 
+                let zero = GA::Scalar::zero();
                 let poly = {
                     let poly_0 =
                         GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
-                    let poly_1 = read_field_element_le(&stem)?;
+                    let poly_1 = read_field_element_le(&stem.clone().into_bytes())?;
                     let mut poly = vec![poly_0, poly_1];
                     for s_commitment in tmp_s_commitments.clone() {
                         poly.push(point_to_field_element(&s_commitment)?);
                     }
-                    poly.resize(domain_size, GA::Scalar::zero());
+                    poly.resize(domain_size, zero);
 
                     poly
                 };
@@ -671,9 +742,9 @@ where
                 // Proof of absence: case of a differing stem.
                 //
                 // Return an unopened stem-level node.
-                let depth = self.get_key().get_depth();
+                let depth = stem.get_depth();
                 if !key_fragments.is_proper_prefix_of(&encoded_key) {
-                    return Ok(ProofCommitment {
+                    return Ok(ProofCommitments {
                         commitment_elements: CommitmentElements {
                             commitments: vec![tmp_commitment, tmp_commitment],
                             elements: Elements {
@@ -682,8 +753,10 @@ where
                                 fs: vec![poly.clone(), poly],
                             },
                         },
-                        ext_status: ExtStatus::AbsentOther as usize | (depth << 3),
-                        alt: stem.to_vec(),
+                        extra_data: ExtraProofData {
+                            ext_status: ExtStatus::AbsentOther as usize | (depth << 3),
+                            poa_stems: stem.clone(),
+                        },
                     });
                 }
 
@@ -692,7 +765,7 @@ where
 
                 let limb_index = slot / limb_bits_size;
                 let suffix_slot = 2 + limb_index;
-                let mut s_poly = vec![GA::Scalar::zero(); domain_size];
+                let mut s_poly = vec![zero; domain_size];
                 let start_index = limb_index * limb_bits_size;
                 let count = fill_suffix_tree_poly(
                     &mut s_poly,
@@ -710,18 +783,20 @@ where
                     // so that we know not to build the polynomials in this case,
                     // as all the information is available before fillSuffixTreePoly
                     // has to be called, save the count.
-                    debug_assert_eq!(poly[suffix_slot], GA::Scalar::zero()); // poly[suffix_slot] = None
-                    return Ok(ProofCommitment {
+                    debug_assert_eq!(poly[suffix_slot], zero);
+                    return Ok(ProofCommitments {
                         commitment_elements: CommitmentElements {
                             commitments: vec![tmp_commitment, tmp_commitment, tmp_commitment],
                             elements: Elements {
                                 zs: vec![0usize, 1, suffix_slot],
-                                ys: vec![poly[0], poly[1], GA::Scalar::zero()],
+                                ys: vec![poly[0], poly[1], zero],
                                 fs: vec![poly.clone(), poly.clone(), poly],
                             },
                         },
-                        ext_status: ExtStatus::AbsentEmpty as usize | (depth << 3),
-                        alt: vec![], // None
+                        extra_data: ExtraProofData {
+                            ext_status: ExtStatus::AbsentEmpty as usize | (depth << 3),
+                            poa_stems: K::Stem::default(),
+                        },
                     });
                 }
 
@@ -735,8 +810,9 @@ where
                 // since after deletion the value would be set to zero
                 // but still contain the leaf marker 2^128.
                 if leaves[slot].is_none() {
-                    debug_assert_eq!(s_poly[slot], GA::Scalar::zero()); // s_poly[slot] = None
-                    return Ok(ProofCommitment {
+                    debug_assert_eq!(s_poly[2 * slot], zero);
+                    debug_assert_eq!(s_poly[2 * slot + 1], zero);
+                    return Ok(ProofCommitments {
                         commitment_elements: CommitmentElements {
                             commitments: vec![
                                 tmp_commitment,
@@ -745,22 +821,24 @@ where
                                 tmp_s_commitment,
                             ],
                             elements: Elements {
-                                zs: vec![0usize, 1, suffix_slot, slot],
-                                ys: vec![poly[0], poly[1], poly[suffix_slot], GA::Scalar::zero()],
+                                zs: vec![0usize, 1, suffix_slot, 2 * slot],
+                                ys: vec![poly[0], poly[1], poly[suffix_slot], zero],
                                 fs: vec![poly.clone(), poly.clone(), poly, s_poly],
                             },
                         },
-                        ext_status: ExtStatus::Present as usize | (depth << 3), // present, since the stem is present
-                        alt: vec![],                                            // None
+                        extra_data: ExtraProofData {
+                            ext_status: ExtStatus::Present as usize | (depth << 3), // present, since the stem is present
+                            poa_stems: K::Stem::default(),
+                        },
                     });
                 }
 
-                let mut tmp_leaves = vec![GA::Scalar::zero(); 2];
+                let mut tmp_leaves: Vec<GA::Scalar> = vec![zero; 2];
                 leaf_to_commitments(&mut tmp_leaves, leaves[slot].unwrap())?;
-                // s_poly[2 * slot] = tmp_leaves[0]
-                // s_poly[2 * slot + 1] = tmp_leaves[1]
+                debug_assert_eq!(s_poly[2 * slot], tmp_leaves[0]);
+                debug_assert_eq!(s_poly[2 * slot + 1], tmp_leaves[1]);
 
-                Ok(ProofCommitment {
+                Ok(ProofCommitments {
                     commitment_elements: CommitmentElements {
                         commitments: vec![
                             tmp_commitment,
@@ -781,8 +859,10 @@ where
                             fs: vec![poly.clone(), poly.clone(), poly, s_poly.clone(), s_poly],
                         },
                     },
-                    ext_status: ExtStatus::Present as usize | (depth << 3),
-                    alt: vec![], // None
+                    extra_data: ExtraProofData {
+                        ext_status: ExtStatus::Present as usize | (depth << 3),
+                        poa_stems: K::Stem::default(),
+                    },
                 })
             }
             Self::Internal {
@@ -797,7 +877,9 @@ where
 
                 let result = match &children[encoded_key.get_branch()] {
                     Some(child) => child.get_commitments_along_path(
-                        encoded_key[key_fragments.len()..].to_vec(),
+                        encoded_key
+                            .remove_prefix(key_fragments)
+                            .or_else(|_| anyhow::bail!("Fetch non-existent key. key: {:?}", key))?,
                         key,
                     )?,
                     None => {
@@ -811,92 +893,78 @@ where
     }
 }
 
+pub trait AbstractMerkleTree {
+    type Err: Send + Sync + 'static;
+    type Key: AbstractKey;
+    type Value: AbstractValue;
+    type Commitment: PartialEq + Eq;
+    type ProofCommitments: PartialEq + Eq;
+
+    fn insert(&mut self, key: Self::Key, value: Self::Value) -> Result<(), Self::Err>;
+
+    fn delete(&mut self, key: Self::Key) -> Result<(), Self::Err>;
+
+    fn get_value(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Err>;
+
+    fn compute_commitment(&mut self) -> Result<Self::Commitment, Self::Err>;
+
+    fn get_commitments_along_path(
+        &self,
+        key: Self::Key,
+    ) -> Result<Self::ProofCommitments, Self::Err>;
+}
+
 #[derive(Debug, PartialEq, Eq)]
-pub struct VerkleTree<W, GA>
+pub struct VerkleTree<GA>
 where
-    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, GA>>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub root: TrieNode<[u8; 32], [u8; 32], W, GA>,
+    pub root: VerkleNode<[u8; 32], [u8; 32], GA>,
     pub(crate) committer: IpaConfig<GA::Projective>,
 }
 
-impl<W, GA> Default for VerkleTree<W, GA>
+impl<GA> Default for VerkleTree<GA>
 where
-    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, GA>>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
     fn default() -> Self {
-        let domain_size = W::to_usize();
         Self {
-            root: TrieNode::new_root_node(),
-            committer: IpaConfig::new(domain_size),
+            root: VerkleNode::new_root_node(),
+            committer: IpaConfig::new(WIDTH),
         }
     }
 }
 
-impl<W, GA> VerkleTree<W, GA>
+impl<GA> AbstractMerkleTree for VerkleTree<GA>
 where
-    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, GA>>>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn insert(&mut self, key: [u8; 32], value: [u8; 32]) -> anyhow::Result<()> {
+    type Err = anyhow::Error;
+    type Key = [u8; 32];
+    type Value = [u8; 32];
+    type Commitment = GA;
+    type ProofCommitments = ProofCommitments<Self::Key, GA>;
+
+    fn insert(&mut self, key: Self::Key, value: Self::Value) -> anyhow::Result<()> {
         self.root.insert(key.encode(), key, value)
     }
 
-    pub fn delete(&mut self, key: [u8; 32]) -> anyhow::Result<()> {
-        let encoded_key = key.encode();
-
-        self.root.delete(encoded_key)
+    fn delete(&mut self, key: Self::Key) -> anyhow::Result<()> {
+        self.root.delete(key.encode())
     }
 
-    pub fn get(&self, key: [u8; 32]) -> anyhow::Result<Option<[u8; 32]>> {
-        let encoded_key = key.encode();
-
-        self.root.get(encoded_key)
+    fn get_value(&self, key: Self::Key) -> anyhow::Result<Option<Self::Value>> {
+        self.root.get_value(key.encode())
     }
 
-    pub fn compute_commitment(&mut self) -> anyhow::Result<GA> {
+    fn compute_commitment(&mut self) -> anyhow::Result<Self::Commitment> {
         self.root.compute_commitment(&self.committer)
     }
 
-    pub fn get_commitments_along_path(&self, key: [u8; 32]) -> anyhow::Result<ProofCommitment<GA>> {
+    fn get_commitments_along_path(&self, key: Self::Key) -> anyhow::Result<Self::ProofCommitments> {
         self.root.get_commitments_along_path(key.encode(), key)
     }
-}
-
-pub fn get_commitments_for_multi_proof<W, GA>(
-    tree: &VerkleTree<W, GA>,
-    keys: &[[u8; 32]],
-) -> anyhow::Result<MultiProofCommitment<GA>>
-where
-    W: ArrayLength<Option<TrieNode<[u8; 32], [u8; 32], W, GA>>>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
-{
-    let mut c = CommitmentElements::default();
-    let mut ext_statuses = vec![];
-    let mut poa_stems = vec![];
-
-    for key in keys {
-        let ProofCommitment {
-            mut commitment_elements,
-            ext_status,
-            alt,
-        } = tree.get_commitments_along_path(*key)?;
-        c.merge(&mut commitment_elements);
-        ext_statuses.push(ext_status);
-        if !alt.is_empty() {
-            poa_stems.push(alt);
-        }
-    }
-
-    Ok(MultiProofCommitment {
-        commitment_elements: c,
-        ext_status: ext_statuses,
-        alt: poa_stems,
-    })
 }

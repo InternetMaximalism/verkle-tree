@@ -1,4 +1,5 @@
 pub mod bn256_verkle_tree;
+pub mod path;
 pub mod proof;
 pub mod trie;
 pub mod utils;
@@ -10,12 +11,12 @@ mod tests {
 
     use crate::verkle_tree::{
         bn256_verkle_tree::{Bn256VerkleTree, VerkleTreeZkp},
-        trie::VerkleTree,
+        trie::{AbstractMerkleTree, VerkleTree},
     };
 
     #[test]
     fn test_verkle_tree() {
-        let mut tree = VerkleTree::<U256, G1Affine>::default();
+        let mut tree = VerkleTree::<G1Affine>::default();
         let mut key = [0u8; 32];
         key[0] = 13;
         let mut value = [0u8; 32];
