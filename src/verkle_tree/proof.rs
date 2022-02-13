@@ -55,14 +55,31 @@ pub struct ExtraProofData<K: AbstractKey> {
     pub poa_stems: K::Stem, // stems proving another stem is absent
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProofCommitments<K: AbstractKey, GA: CurveAffine> {
-    pub commitment_elements: CommitmentElements<GA>,
-    pub extra_data: ExtraProofData<K>,
-}
+// #[derive(Clone, Debug, PartialEq, Eq)]
+// pub struct ProofCommitments<K: AbstractKey, GA: CurveAffine> {
+//     pub commitment_elements: CommitmentElements<GA>,
+//     pub extra_data: ExtraProofData<K>,
+// }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultiProofCommitments<K: AbstractKey, GA: CurveAffine> {
     pub commitment_elements: CommitmentElements<GA>,
     pub extra_data_list: Vec<ExtraProofData<K>>,
+}
+
+impl<K: AbstractKey, GA: CurveAffine> Default for MultiProofCommitments<K, GA> {
+    fn default() -> Self {
+        Self {
+            commitment_elements: CommitmentElements::default(),
+            extra_data_list: vec![],
+        }
+    }
+}
+
+impl<K: AbstractKey, GA: CurveAffine> MultiProofCommitments<K, GA> {
+    pub fn merge(&mut self, other: &mut Self) {
+        self.commitment_elements
+            .merge(&mut other.commitment_elements);
+        self.extra_data_list.append(&mut other.extra_data_list);
+    }
 }

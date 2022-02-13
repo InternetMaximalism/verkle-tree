@@ -142,7 +142,6 @@ where
 
     let mut increment = 0usize;
 
-    // TODO: It takes too long to find some random points with the specific order.
     while points.len() != num_points {
         let mut x = u;
         x.add_assign(&read_field_element_le(&increment.to_le_bytes()).unwrap()); // y = u + increment

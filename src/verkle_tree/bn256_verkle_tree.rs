@@ -7,9 +7,7 @@ use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
 use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
-use super::proof::{
-    CommitmentElements, Elements, ExtraProofData, MultiProofCommitments, ProofCommitments,
-};
+use super::proof::{CommitmentElements, Elements, ExtraProofData, MultiProofCommitments};
 use super::trie::{AbstractMerkleTree, VerkleNode, VerkleTree};
 
 #[derive(Clone, Debug)]
@@ -61,7 +59,7 @@ where
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<(VerkleProof<G1>, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        if tree.root.get_digest().is_none() {
+        if tree.root.get_info().digest.is_none() {
             anyhow::bail!("Please execute `tree.compute_commitment()` before creating proof.")
         }
 
@@ -132,12 +130,12 @@ where
     let mut extra_data_list = vec![];
 
     for key in keys {
-        let ProofCommitments {
+        let MultiProofCommitments {
             mut commitment_elements,
-            extra_data,
+            extra_data_list: mut extra_data,
         } = tree.get_commitments_along_path(*key)?;
         c.merge(&mut commitment_elements);
-        extra_data_list.push(extra_data);
+        extra_data_list.append(&mut extra_data);
     }
 
     Ok(MultiProofCommitments {

@@ -72,7 +72,6 @@ where
     let mut point_bytes = write_field_element_le(&point_x);
     let mut point_bytes_y = write_field_element_le(&point_y);
     point_bytes.append(&mut point_bytes_y);
-    println!("point_bytes: {:?}", point_bytes);
     let result = read_field_element_le(&point_bytes)?;
 
     Ok(result)
@@ -110,12 +109,6 @@ pub fn leaf_to_commitments<F: PrimeField>(poly: &mut [F], val: [u8; 32]) -> anyh
     Ok(())
 }
 
-pub fn equal_paths(key1: &[u8], key2: &[u8]) -> bool {
+pub fn equal_stems(key1: &[u8], key2: &[u8]) -> bool {
     key1[..31] == key2[..31]
-}
-
-// offset2key extracts the n bits of a key that correspond to the
-// index of a child node.
-pub fn offset2key(key: &[u8], offset: usize) -> u8 {
-    key[offset]
 }

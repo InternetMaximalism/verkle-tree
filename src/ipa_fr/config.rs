@@ -208,7 +208,10 @@ where
     pub fn new(domain_size: usize) -> Self {
         let start = std::time::Instant::now();
         let srs = generate_random_points::<G>(domain_size).unwrap();
-        println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
+        println!(
+            "generate srs: {} s",
+            start.elapsed().as_micros() as f64 / 1000000.0
+        );
         let q = <G::Affine as CurveAffine>::one();
         let precomputed_weights = PrecomputedWeights::new(domain_size);
 

@@ -127,7 +127,12 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         for i in 0..num_queries {
             transcript.commit_point(&commitments[i])?; // C
 
-            assert!(zs[i] < domain_size);
+            assert!(
+                zs[i] < domain_size,
+                "{:?} must be less than {:?}.",
+                zs[i],
+                domain_size
+            );
             transcript.commit_bytes(&zs[i].to_le_bytes())?;
 
             // get the `y` value
