@@ -1,5 +1,7 @@
 use core::fmt::Debug;
 use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
+use std::borrow::Borrow;
+use std::collections::HashMap;
 
 use crate::ipa_fr::config::{Committer, IpaConfig};
 use crate::ipa_fr::utils::read_field_element_le;
@@ -20,7 +22,7 @@ pub enum ExtStatus {
 
 pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
     type Stem: AbstractStem + Default;
-    type Path: AbstractPath;
+    type Path: AbstractPath + Default;
 
     fn get_stem(&self) -> Self::Stem;
 
@@ -41,7 +43,7 @@ impl AbstractKey for [u8; 32] {
     }
 
     fn get_suffix(&self) -> usize {
-        self[31] as usize
+        usize::from(self[31])
     }
 
     fn to_path(&self) -> TreePath {
@@ -172,13 +174,13 @@ where
     Leaf {
         path: K::Path,
         stem: K::Stem,
-        leaves: Box<[Option<V>; WIDTH]>,
+        leaves: HashMap<usize, V>,      // HashMap<u8, V>
         s_commitments: Option<Vec<GA>>, // Option<[GA; 2]>
         info: NodeInfo<GA>,
     },
     Internal {
         path: K::Path,
-        children: Box<[Option<VerkleNode<K, V, GA>>; WIDTH]>,
+        children: HashMap<usize, VerkleNode<K, V, GA>>, // HashMap<u8, VerkleNode<K, V, GA>>
         info: NodeInfo<GA>,
     },
 }
@@ -200,12 +202,6 @@ where
     pub(crate) digest: Option<GA::Scalar>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry<K, V> {
-    pub key: K,
-    pub value: V,
-}
-
 impl<K, V, GA> VerkleNode<K, V, GA>
 where
     K: AbstractKey,
@@ -213,30 +209,13 @@ where
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn get_info(&self) -> &NodeInfo<GA> {
-        match self {
-            Self::Leaf { info, .. } => info,
-            Self::Internal { info, .. } => info,
-        }
-    }
-}
-
-impl<K, V, GA> VerkleNode<K, V, GA>
-where
-    K: AbstractKey<Path = TreePath>,
-    K::Stem: AbstractStem<Path = TreePath> + IntoFieldElement<GA::Scalar>,
-    V: AbstractValue,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
-{
-    pub fn new_leaf_node(path: K::Path, entry: Entry<K, V>) -> Self {
-        let Entry { key, value } = entry;
-        let mut leaves = [None; WIDTH];
-        leaves[key.get_suffix()] = Some(value);
+    pub fn new_leaf_node(path: K::Path, key: K, value: V) -> Self {
+        let mut leaves = HashMap::new();
+        leaves.insert(key.get_suffix(), value);
         Self::Leaf {
             stem: key.get_stem(),
             path,
-            leaves: Box::new(leaves),
+            leaves,
             s_commitments: None,
             info: NodeInfo {
                 num_nonempty_children: 1,
@@ -247,21 +226,41 @@ where
     }
 
     pub fn new_root_node() -> Self {
-        let mut children = vec![];
-        for _ in 0..WIDTH {
-            children.push(None);
-        }
-
-        let children = Box::new(children.try_into().unwrap()); // = [None; WIDTH]
         Self::Internal {
             path: K::Path::default(),
-            children,
+            children: HashMap::new(),
             info: NodeInfo {
                 num_nonempty_children: 0,
                 commitment: None,
                 digest: None,
             },
         }
+    }
+
+    pub fn get_info(&self) -> &NodeInfo<GA> {
+        match self {
+            Self::Leaf { info, .. } => info,
+            Self::Internal { info, .. } => info,
+        }
+    }
+
+    pub fn get_path(&self) -> &K::Path {
+        match self {
+            Self::Leaf { path, .. } => path,
+            Self::Internal { path, .. } => path,
+        }
+    }
+}
+
+impl<K, V, GA> Default for VerkleNode<K, V, GA>
+where
+    K: AbstractKey,
+    V: AbstractValue,
+    GA: CurveAffine,
+    GA::Base: PrimeField,
+{
+    fn default() -> Self {
+        Self::new_root_node()
     }
 }
 
@@ -273,10 +272,13 @@ where
     GA: CurveAffine,
     <GA as CurveAffine>::Base: PrimeField,
 {
-    pub fn insert(&mut self, encoded_key: K::Path, entry: Entry<K, V>) -> anyhow::Result<()> {
-        let Entry { key, value } = entry;
+    pub fn insert(&mut self, relative_path: K::Path, key: K, value: V) -> Option<V> {
+        if relative_path.is_empty() {
+            anyhow::anyhow!("`relative_path` must be non-empty.");
+        }
+
         match self {
-            Self::Leaf {
+            VerkleNode::Leaf {
                 stem,
                 path,
                 leaves,
@@ -289,16 +291,15 @@ where
                     },
                 ..
             } => {
-                if key.get_stem() == stem.clone() {
+                if key.get_stem() == stem.clone() || path.clone() == stem.to_path() {
                     let _ = commitment.take();
                     let _ = digest.take();
-                    let old_leaf =
-                        std::mem::replace(&mut leaves[encoded_key.get_suffix()], Some(value));
+                    let old_leaf = leaves.insert(key.get_suffix(), value);
                     if old_leaf.is_some() {
                         *num_nonempty_children += 1;
                     }
 
-                    return Ok(());
+                    return old_leaf;
                 }
 
                 // A new branch node has to be inserted. Depending
@@ -307,32 +308,25 @@ where
                 let depth = path.len();
                 let next_branch_of_existing_key =
                     TreePath::from(&stem.to_path()[depth..]).get_next_branch();
-                let mut children = vec![];
-                for i in 0..WIDTH {
-                    if i == next_branch_of_existing_key {
-                        let mut new_path = path.clone();
-                        new_path.inner.push(next_branch_of_existing_key);
-                        let moving_child = Self::Leaf {
-                            stem: stem.clone(),
-                            path: new_path,
-                            leaves: leaves.clone(),
-                            s_commitments: s_commitments.clone(),
-                            info: NodeInfo {
-                                commitment: *commitment,
-                                digest: *digest,
-                                num_nonempty_children: *num_nonempty_children,
-                            },
-                        };
-                        children.push(Some(moving_child));
-                    } else {
-                        children.push(None);
-                    }
-                }
+                let mut children = HashMap::new();
+                let mut new_path = path.clone();
+                new_path.inner.push(next_branch_of_existing_key);
+                let moving_child = VerkleNode::Leaf {
+                    stem: stem.clone(),
+                    path: new_path,
+                    leaves: leaves.clone(),
+                    s_commitments: s_commitments.clone(),
+                    info: NodeInfo {
+                        commitment: *commitment,
+                        digest: *digest,
+                        num_nonempty_children: *num_nonempty_children,
+                    },
+                };
+                children.insert(next_branch_of_existing_key, moving_child);
 
-                let children = children.try_into().unwrap(); // = [None; WIDTH]
-                let mut new_branch = Self::Internal {
+                let mut new_branch = VerkleNode::Internal {
                     path: path.clone(),
-                    children: Box::new(children),
+                    children,
                     info: NodeInfo {
                         commitment: None,
                         digest: None,
@@ -340,16 +334,16 @@ where
                     },
                 };
 
-                let next_branch_of_inserting_key = encoded_key.get_next_branch();
+                let next_branch_of_inserting_key = relative_path.get_next_branch();
                 if next_branch_of_inserting_key != next_branch_of_existing_key {
                     // Next branch differs, so this was the last level.
                     // Insert it directly into its suffix.
-                    let mut leaves = Box::new([None; WIDTH]);
-                    leaves[key.get_suffix()] = Some(value);
+                    let mut leaves = HashMap::new();
+                    leaves.insert(key.get_suffix(), value);
                     let mut new_path = path.clone();
                     new_path.inner.push(next_branch_of_inserting_key);
-                    let leaf_node = Self::Leaf {
-                        stem: stem.clone(),
+                    let leaf_node = VerkleNode::Leaf {
+                        stem: key.get_stem(),
                         path: new_path,
                         leaves,
                         s_commitments: s_commitments.clone(),
@@ -361,7 +355,7 @@ where
                     };
 
                     match &mut new_branch {
-                        Self::Internal {
+                        VerkleNode::Internal {
                             children,
                             info:
                                 NodeInfo {
@@ -370,26 +364,23 @@ where
                                 },
                             ..
                         } => {
-                            let _ = std::mem::replace(
-                                &mut children[next_branch_of_inserting_key],
-                                Some(leaf_node),
-                            );
+                            children.insert(next_branch_of_inserting_key, leaf_node);
                             *num_nonempty_children += 1;
                         }
-                        Self::Leaf { .. } => {
+                        VerkleNode::Leaf { .. } => {
                             panic!("unreachable code");
                         }
                     }
                     let _ = std::mem::replace(self, new_branch);
 
-                    return Ok(());
+                    return None;
                 }
 
                 let _ = std::mem::replace(self, new_branch);
 
-                self.insert(TreePath::from(&encoded_key[1..]), entry)
+                self.insert(relative_path, key, value)
             }
-            Self::Internal {
+            VerkleNode::Internal {
                 path,
                 children,
                 info: NodeInfo {
@@ -399,24 +390,30 @@ where
             } => {
                 let _ = commitment.take();
                 let _ = digest.take();
-                let next_branch = encoded_key.get_next_branch();
-                if children[next_branch].is_none() {
-                    let entry = Entry { key, value };
-                    let mut new_path = path.clone();
-                    new_path.inner.push(next_branch);
-                    children[next_branch] = Some(VerkleNode::new_leaf_node(new_path, entry));
+
+                let next_relative_path = TreePath::from(&relative_path[1..]);
+                if next_relative_path.is_empty() {
+                    anyhow::anyhow!("`relative_path` must be non-empty.");
                 }
 
-                if let Some(child) = &mut children[next_branch] {
-                    child.insert(TreePath::from(&encoded_key[1..]), entry)
+                let next_branch_of_inserting_key = relative_path.get_next_branch();
+                if let Some(child) = children.get_mut(&next_branch_of_inserting_key) {
+                    child.insert(next_relative_path, key, value)
                 } else {
-                    Ok(())
+                    let mut new_path = path.clone();
+                    new_path.inner.push(next_branch_of_inserting_key);
+                    children.insert(
+                        next_branch_of_inserting_key,
+                        VerkleNode::new_leaf_node(new_path, key, value),
+                    );
+
+                    None
                 }
             }
         }
     }
 
-    pub fn remove(&mut self, encoded_key: K::Path, key: K) -> anyhow::Result<()> {
+    pub fn remove(&mut self, relative_path: K::Path, key: &K) -> Option<V> {
         match self {
             Self::Leaf {
                 leaves,
@@ -428,14 +425,14 @@ where
                     },
                 ..
             } => {
-                let old_leaf = std::mem::replace(&mut leaves[key.get_suffix()], None);
-                if old_leaf.is_none() {
-                    anyhow::bail!("Delete non-existent key. key: {:?}", key);
+                let old_leaf = leaves.remove(&key.borrow().get_suffix());
+                if old_leaf.is_some() {
+                    let _ = commitment.take();
+                    let _ = digest.take();
+                    *num_nonempty_children -= 1;
                 }
 
-                let _ = commitment.take();
-                let _ = digest.take();
-                *num_nonempty_children -= 1;
+                old_leaf
             }
             Self::Internal {
                 children,
@@ -447,40 +444,40 @@ where
                 let _ = commitment.take();
                 let _ = digest.take();
 
-                let next_branch = encoded_key.get_next_branch();
-                match &mut children[next_branch] {
-                    Some(child) => {
-                        child.remove(TreePath::from(&encoded_key[1..]), key)?;
+                let next_branch = relative_path.get_next_branch();
+                if let Some(child) = children.get_mut(&next_branch) {
+                    let old_value = child.remove(TreePath::from(&relative_path[1..]), key);
 
-                        // Remove a empty node if any.
-                        if child.get_info().num_nonempty_children == 0 {
-                            let _ = children[next_branch].take();
-                        }
+                    // Remove a empty node if any.
+                    if child.get_info().num_nonempty_children == 0 {
+                        let _ = children.remove(&next_branch);
                     }
-                    None => {
-                        anyhow::bail!("Delete non-existent stem. key: {:?}", key);
-                    }
+
+                    old_value
+                } else {
+                    None
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Get a value from this tree.
-    pub fn get_value(&self, encoded_key: K::Path, key: K) -> anyhow::Result<Option<V>> {
+    pub fn get(&self, relative_path: K::Path, key: &K) -> Option<&V> {
         match &self {
             Self::Leaf { stem, leaves, .. } => {
                 if key.get_stem() != stem.clone() {
-                    Ok(None)
+                    None
                 } else {
-                    Ok(leaves[key.get_suffix()])
+                    leaves.get(&key.get_suffix())
                 }
             }
-            Self::Internal { children, .. } => match &children[encoded_key.get_next_branch()] {
-                Some(child) => child.get_value(TreePath::from(&encoded_key[1..]), key),
-                None => Ok(None),
-            },
+            Self::Internal { children, .. } => {
+                if let Some(child) = children.get(&relative_path.get_next_branch()) {
+                    child.get(TreePath::from(&relative_path[1..]), key)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -489,26 +486,27 @@ where
     /// If the entry exists, `witness` is the entry.
     /// If the entry does not exist,
     /// `witness` is an entry corresponding "the nearest" key to the given one.
-    fn _get_witness(&self, encoded_key: K::Path, key: K) -> anyhow::Result<(K::Path, V)> {
+    pub fn get_witness(&self, relative_path: K::Path, key: K) -> anyhow::Result<(K::Path, V)> {
         match &self {
             Self::Leaf { stem, leaves, .. } => {
                 if key.get_stem() != stem.clone() {
                     todo!();
                 }
 
-                match leaves[key.get_suffix()] {
-                    Some(value) => Ok((key.to_path(), value)),
+                match leaves.get(&key.get_suffix()) {
+                    Some(&value) => Ok((key.to_path(), value)),
                     None => {
                         todo!()
                     }
                 }
             }
-            Self::Internal { children, .. } => match &children[encoded_key.get_next_branch()] {
-                Some(child) => child._get_witness(TreePath::from(&encoded_key[1..]), key),
-                None => {
+            Self::Internal { children, .. } => {
+                if let Some(child) = children.get(&relative_path.get_next_branch()) {
+                    child.get_witness(TreePath::from(&relative_path[1..]), key)
+                } else {
                     todo!()
                 }
-            },
+            }
         }
     }
 }
@@ -516,7 +514,7 @@ where
 pub fn compute_commitment_of_leaf_node<K, GA, C>(
     committer: &C,
     stem: &mut K::Stem,
-    leaves: &mut Box<[Option<[u8; 32]>; WIDTH]>,
+    leaves: &mut HashMap<usize, [u8; 32]>,
 ) -> anyhow::Result<(Vec<GA>, GA)>
 where
     K: AbstractKey,
@@ -525,10 +523,8 @@ where
     GA::Base: PrimeField,
     C: Committer<GA>,
 {
-    let width = WIDTH;
     let value_size = 32;
-    let limbs = LIMBS;
-    let limb_bits_size = value_size * 8 / limbs;
+    let limb_bits_size = value_size * 8 / LIMBS;
     debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
 
     let poly_0 = GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
@@ -538,21 +534,25 @@ where
         .map_err(|_| anyhow::anyhow!("unreachable code"))?;
     let mut poly = vec![poly_0, poly_1];
 
+    let mut leaves_array = [None; WIDTH];
+    for (&i, &v) in leaves.iter() {
+        leaves_array[i] = Some(v);
+    }
     let mut s_commitments = vec![];
-    for limb in leaves.chunks(limb_bits_size) {
-        let mut sub_poly = vec![GA::Scalar::zero(); width];
+    for limb in leaves_array.chunks(limb_bits_size) {
+        let mut sub_poly = [GA::Scalar::zero(); WIDTH];
         let _count = fill_leaf_tree_poly(&mut sub_poly, limb)?;
         let tmp_s_commitment = committer
-            .commit(&sub_poly /* , width - count */)
+            .commit(&sub_poly)
             .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
         s_commitments.push(tmp_s_commitment);
         poly.push(point_to_field_element(&tmp_s_commitment)?);
     }
 
-    poly.resize(width, GA::Scalar::zero());
+    poly.resize(WIDTH, GA::Scalar::zero());
 
     let tmp_commitment = committer
-        .commit(&poly /* , width - (2 + limbs) */)
+        .commit(&poly)
         .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
 
     Ok((s_commitments, tmp_commitment))
@@ -606,17 +606,10 @@ where
                 },
                 ..
             } => {
-                let mut children_digests = vec![];
-                for child in children.iter_mut() {
-                    match child {
-                        Some(x) => {
-                            x.compute_commitment(committer)?;
-                            children_digests.push(x.get_info().digest.unwrap());
-                        }
-                        None => {
-                            children_digests.push(GA::Scalar::zero());
-                        }
-                    }
+                let mut children_digests = vec![GA::Scalar::zero(); WIDTH];
+                for (&i, child) in children.iter_mut() {
+                    child.compute_commitment(committer)?;
+                    children_digests[i] = child.get_info().digest.unwrap();
                 }
 
                 let tmp_commitment =
@@ -633,7 +626,6 @@ where
 
     pub fn get_commitments_along_path(
         &self,
-        encoded_key: K::Path,
         keys: &[K],
     ) -> anyhow::Result<MultiProofCommitments<K, GA>> {
         match self {
@@ -645,10 +637,8 @@ where
                 info: NodeInfo { commitment, .. },
                 ..
             } => {
-                let width = WIDTH;
                 let value_size = 32;
-                let limbs = LIMBS;
-                let limb_bits_size = value_size * 8 / limbs;
+                let limb_bits_size = value_size * 8 / LIMBS;
                 debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
 
                 let tmp_s_commitments = s_commitments
@@ -669,7 +659,7 @@ where
                     for s_commitment in tmp_s_commitments.clone() {
                         poly.push(point_to_field_element(&s_commitment)?);
                     }
-                    poly.resize(width, zero);
+                    poly.resize(WIDTH, zero);
 
                     poly
                 };
@@ -699,18 +689,22 @@ where
                     }
 
                     let suffix = key.get_suffix();
-                    debug_assert!(suffix < width);
+                    debug_assert!(suffix < WIDTH);
 
-                    let slot = (limbs * suffix) % width;
+                    let slot = (LIMBS * suffix) % WIDTH;
 
                     let limb_index = suffix / limb_bits_size;
                     let suffix_slot = 2 + limb_index;
-                    let mut s_poly = vec![zero; width];
+                    let mut s_poly = vec![zero; WIDTH];
                     let start_index = limb_index * limb_bits_size;
-                    let count = fill_leaf_tree_poly(
-                        &mut s_poly,
-                        &leaves[start_index..(start_index + limb_bits_size)],
-                    )?;
+                    // let sub_leaves_array = leaves_array[start_index..(start_index + limb_bits_size)];
+                    let mut sub_leaves_array = vec![None; limb_bits_size];
+                    for (i, &v) in leaves.iter() {
+                        if (start_index..(start_index + limb_bits_size)).contains(i) {
+                            sub_leaves_array[i - start_index] = Some(v);
+                        }
+                    }
+                    let count = fill_leaf_tree_poly(&mut s_poly, &sub_leaves_array)?;
 
                     // Proof of absence: case of a missing suffix tree.
                     //
@@ -743,7 +737,7 @@ where
 
                     let tmp_s_commitment = tmp_s_commitments[limb_index];
 
-                    if leaves[suffix].is_none() {
+                    if leaves.get(&suffix).is_none() {
                         // Proof of absence: case of a missing value.
                         //
                         // Leaf tree is present as a child of the extension,
@@ -751,7 +745,7 @@ where
                         // only happen when the leaf has never been written to
                         // since after deletion the value would be set to zero
                         // but still contain the leaf marker 2^128.
-                        for i in 0..limbs {
+                        for i in 0..LIMBS {
                             debug_assert_eq!(s_poly[slot + i], zero);
                         }
                         multi_proof_commitments.merge(&mut MultiProofCommitments {
@@ -776,9 +770,9 @@ where
                         continue;
                     }
 
-                    let mut tmp_leaves: Vec<GA::Scalar> = vec![zero; limbs];
-                    leaf_to_commitments(&mut tmp_leaves, leaves[suffix].unwrap())?;
-                    for i in 0..limbs {
+                    let mut tmp_leaves = [zero; LIMBS];
+                    leaf_to_commitments(&mut tmp_leaves, *leaves.get(&suffix).unwrap())?;
+                    for i in 0..LIMBS {
                         debug_assert_eq!(s_poly[slot + i], tmp_leaves[i]);
                     }
 
@@ -831,13 +825,8 @@ where
 
                 // fill in the polynomial for this node
                 let mut fi = vec![GA::Scalar::zero(); WIDTH];
-                for (i, child) in children.iter().enumerate() {
-                    match child {
-                        Some(c) => {
-                            fi[i] = c.get_info().digest.unwrap();
-                        }
-                        None => {}
-                    }
+                for (&i, child) in children.iter() {
+                    fi[i] = child.get_info().digest.unwrap();
                 }
 
                 for group in groups.clone() {
@@ -860,28 +849,19 @@ where
                 // Loop over again, collecting the children's proof elements
                 // This is because the order is breadth-first.
                 for group in groups {
-                    let child_idx = group[0].to_path()[depth];
-
-                    // Special case of a proof of absence: no children
-                    // commitment, as the value is 0.
-                    if children[child_idx].is_none() {
+                    let child = children.get(&group[0].to_path()[depth]);
+                    if let Some(child) = child {
+                        multi_proof_commitments
+                            .merge(&mut child.get_commitments_along_path(&group)?);
+                    } else {
+                        // Special case of a proof of absence: no children
+                        // commitment, as the value is 0.
                         multi_proof_commitments
                             .extra_data_list
                             .push(ExtraProofData {
                                 ext_status: ExtStatus::AbsentEmpty as usize | (depth << 3),
                                 poa_stems: K::Stem::default(),
                             });
-                        continue;
-                    }
-
-                    match &children[child_idx] {
-                        Some(child) => {
-                            multi_proof_commitments.merge(&mut child.get_commitments_along_path(
-                                TreePath::from(&encoded_key[1..]),
-                                &group,
-                            )?);
-                        }
-                        None => {}
                     }
                 }
 
@@ -917,27 +897,6 @@ fn group_keys<K: AbstractKey<Path = TreePath>>(keys: &[K], depth: usize) -> Vec<
     groups
 }
 
-pub trait AbstractMerkleTree {
-    type Err: Send + Sync + 'static;
-    type Key: AbstractKey;
-    type Value: AbstractValue;
-    type Commitment: PartialEq + Eq;
-    type ProofCommitments: PartialEq + Eq;
-
-    fn insert(&mut self, key: Self::Key, value: Self::Value) -> Result<(), Self::Err>;
-
-    fn remove(&mut self, key: Self::Key) -> Result<(), Self::Err>;
-
-    fn get_value(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Err>;
-
-    fn compute_commitment(&mut self) -> Result<Self::Commitment, Self::Err>;
-
-    fn get_commitments_along_path(
-        &self,
-        key: Self::Key,
-    ) -> Result<Self::ProofCommitments, Self::Err>;
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct VerkleTree<GA>
 where
@@ -961,35 +920,51 @@ where
     }
 }
 
-impl<GA> AbstractMerkleTree for VerkleTree<GA>
+impl<GA> VerkleTree<GA>
 where
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    type Err = anyhow::Error;
-    type Key = [u8; 32];
-    type Value = [u8; 32];
-    type Commitment = GA;
-    type ProofCommitments = MultiProofCommitments<Self::Key, GA>;
-
-    fn insert(&mut self, key: Self::Key, value: Self::Value) -> anyhow::Result<()> {
-        let entry = Entry { key, value };
-        self.root.insert(key.to_path(), entry)
+    pub fn insert(&mut self, key: [u8; 32], value: [u8; 32]) -> Option<[u8; 32]> {
+        self.root.insert(key.to_path(), key, value)
     }
 
-    fn remove(&mut self, key: Self::Key) -> anyhow::Result<()> {
+    pub fn remove(&mut self, key: &[u8; 32]) -> Option<[u8; 32]> {
         self.root.remove(key.to_path(), key)
     }
 
-    fn get_value(&self, key: Self::Key) -> anyhow::Result<Option<Self::Value>> {
-        self.root.get_value(key.to_path(), key)
+    pub fn get(&self, key: &[u8; 32]) -> Option<&[u8; 32]> {
+        self.root.get(key.to_path(), key)
     }
+}
 
-    fn compute_commitment(&mut self) -> anyhow::Result<Self::Commitment> {
+// pub trait AbstractMerkleTree<K, V>
+// where
+//     K: AbstractKey,
+//     V: AbstractValue,
+// {
+//     type Err: Send + Sync + 'static;
+//     type Commitment: PartialEq + Eq;
+//     type ProofCommitments: PartialEq + Eq;
+
+//     fn compute_commitment(&mut self) -> Result<Self::Commitment, Self::Err>;
+
+//     fn get_commitments_along_path(&self, keys: &[K]) -> Result<Self::ProofCommitments, Self::Err>;
+// }
+
+impl<GA> VerkleTree<GA>
+where
+    GA: CurveAffine,
+    GA::Base: PrimeField,
+{
+    pub fn compute_commitment(&mut self) -> anyhow::Result<GA> {
         self.root.compute_commitment(&self.committer)
     }
 
-    fn get_commitments_along_path(&self, key: Self::Key) -> anyhow::Result<Self::ProofCommitments> {
-        self.root.get_commitments_along_path(key.to_path(), &[key])
+    pub fn get_commitments_along_path(
+        &self,
+        keys: &[[u8; 32]],
+    ) -> anyhow::Result<MultiProofCommitments<[u8; 32], GA>> {
+        self.root.get_commitments_along_path(keys)
     }
 }

@@ -1,5 +1,5 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
-use franklin_crypto::bellman::{CurveAffine, CurveProjective, PrimeField};
+use franklin_crypto::bellman::CurveProjective;
 // use franklin_crypto::bellman::Field;
 
 use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
@@ -7,7 +7,7 @@ use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
 use super::proof::{CommitmentElements, Elements, ExtraProofData, MultiProofCommitments};
-use super::trie::{AbstractMerkleTree, VerkleTree};
+use super::trie::VerkleTree;
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
@@ -18,48 +18,18 @@ pub struct VerkleProof<G: CurveProjective> {
     pub values: Vec<[u8; 32]>,
 }
 
-pub trait VerkleTreeZkp<G, T>
-where
-    G: CurveProjective,
-    <G::Affine as CurveAffine>::Base: PrimeField,
-    T: Bn256Transcript,
-{
-    type Err: Send + Sync + 'static;
-
-    #[allow(clippy::type_complexity)]
-    fn create_proof(
-        tree: &VerkleTree<G::Affine>,
+impl VerkleProof<G1> {
+    pub fn create(
+        tree: &mut VerkleTree<G1Affine>,
         keys: &[[u8; 32]],
-        ipa_conf: &IpaConfig<G>,
-    ) -> Result<(VerkleProof<G>, Elements<G::Scalar>), Self::Err>;
-
-    fn check_proof(
-        proof: VerkleProof<G>,
-        zs: &[usize],
-        ys: &[Fr],
-        ipa_conf: &IpaConfig<G>,
-    ) -> Result<bool, Self::Err>;
-}
-
-pub struct Bn256VerkleTree;
-
-impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
-    type Err = anyhow::Error;
-
-    fn create_proof(
-        tree: &VerkleTree<G1Affine>,
-        keys: &[[u8; 32]],
-        ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<(VerkleProof<G1>, Elements<Fr>)> {
+    ) -> anyhow::Result<(Self, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        if tree.root.get_info().digest.is_none() {
-            anyhow::bail!("Please execute `tree.compute_commitment()` before creating proof.")
-        }
+        tree.compute_commitment()?;
 
         let MultiProofCommitments {
             commitment_elements,
             extra_data_list,
-        } = get_commitments_for_multi_proof(tree, keys)?;
+        } = tree.get_commitments_along_path(keys)?;
 
         let CommitmentElements {
             commitments,
@@ -69,10 +39,9 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
         let mut values: Vec<[u8; 32]> = vec![];
         for k in keys {
             let val = tree
-                .get_value(*k)
-                .map_err(|_| anyhow::anyhow!("key {:?} is not found in this tree", k))?
-                .unwrap();
-            values.push(val);
+                .get(k)
+                .ok_or_else(|| anyhow::anyhow!("key {:?} is not found in this tree", k))?;
+            values.push(*val);
         }
 
         let multi_proof = Bn256BatchProof::create_proof(
@@ -80,7 +49,7 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
             &elements.fs,
             &elements.zs,
             transcript.into_params(),
-            ipa_conf,
+            &tree.committer,
         )?;
         let proof = VerkleProof {
             multi_proof,
@@ -93,46 +62,15 @@ impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
         Ok((proof, elements))
     }
 
-    fn check_proof(
-        proof: VerkleProof<G1>,
-        zs: &[usize],
-        ys: &[Fr],
-        ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<bool> {
+    pub fn check(&self, zs: &[usize], ys: &[Fr], ipa_conf: &IpaConfig<G1>) -> anyhow::Result<bool> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         Bn256BatchProof::check_proof(
-            proof.multi_proof,
-            &proof.commitments,
+            self.multi_proof.clone(),
+            &self.commitments.clone(),
             ys,
             zs,
             transcript.into_params(),
             ipa_conf,
         )
     }
-}
-
-pub fn get_commitments_for_multi_proof<GA>(
-    tree: &VerkleTree<GA>,
-    keys: &[[u8; 32]],
-) -> anyhow::Result<MultiProofCommitments<[u8; 32], GA>>
-where
-    GA: CurveAffine,
-    GA::Base: PrimeField,
-{
-    let mut c = CommitmentElements::default();
-    let mut extra_data_list = vec![];
-
-    for key in keys {
-        let MultiProofCommitments {
-            mut commitment_elements,
-            extra_data_list: mut extra_data,
-        } = tree.get_commitments_along_path(*key)?;
-        c.merge(&mut commitment_elements);
-        extra_data_list.append(&mut extra_data);
-    }
-
-    Ok(MultiProofCommitments {
-        commitment_elements: c,
-        extra_data_list,
-    })
 }

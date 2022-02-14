@@ -243,7 +243,8 @@ impl<G: CurveProjective> Committer<G::Affine> for IpaConfig<G> {
                 .map(|x| x.into_projective())
                 .collect::<Vec<_>>(),
             polynomial,
-        )?
+        )
+        .unwrap()
         .into_affine();
 
         Ok(result)

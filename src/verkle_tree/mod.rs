@@ -10,10 +10,7 @@ mod tests {
     use franklin_crypto::bellman::Field;
 
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
-    use crate::verkle_tree::{
-        bn256_verkle_tree::{Bn256VerkleTree, VerkleTreeZkp},
-        trie::{AbstractMerkleTree, VerkleTree},
-    };
+    use crate::verkle_tree::{bn256_verkle_tree::VerkleProof, trie::VerkleTree};
 
     #[test]
     fn test_verkle_verification_with_one_entry() {
@@ -22,19 +19,19 @@ mod tests {
         key[0] = 13;
         let mut value = [0u8; 32];
         value[0] = 27;
-        tree.insert(key, value).unwrap();
+        tree.insert(key, value);
         tree.compute_commitment().unwrap();
 
-        let result = tree.get_commitments_along_path(key).unwrap();
+        let result = tree.get_commitments_along_path(&[key]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
-        let proof = Bn256VerkleTree::create_proof(&tree, &[key], &tree.committer).unwrap();
+        let (proof, elements) = VerkleProof::create(&mut tree, &[key]).unwrap();
 
-        let success =
-            Bn256VerkleTree::check_proof(proof.0, &proof.1.zs, &proof.1.ys, &tree.committer)
-                .unwrap();
+        let success = proof
+            .check(&elements.zs, &elements.ys, &tree.committer)
+            .unwrap();
 
         assert!(
             success,
@@ -50,10 +47,11 @@ mod tests {
             let mut key = [0u8; 32];
             key[0] = 13;
             key[1] = 2;
+            key[2] = 32;
             key[30] = 164;
             key[31] = 254;
             let value = [255u8; 32];
-            tree.insert(key, value).unwrap();
+            tree.insert(key, value);
             keys.push(key);
         }
         {
@@ -63,7 +61,7 @@ mod tests {
             value[15] = 193;
             value[16] = 60;
             value[31] = 27;
-            tree.insert(key, value).unwrap();
+            tree.insert(key, value);
             keys.push(key);
         }
         {
@@ -73,10 +71,9 @@ mod tests {
             key[30] = 164;
             key[31] = 255;
             let value = [0u8; 32];
-            tree.insert(key, value).unwrap();
+            tree.insert(key, value);
             keys.push(key);
         }
-
         {
             let mut key = [0u8; 32];
             key[0] = 13;
@@ -88,61 +85,51 @@ mod tests {
             value[15] = 193;
             value[16] = 60;
             value[31] = 136;
-            println!("insert entry 3");
-            tree.insert(key, value).unwrap();
-            println!("end insert entry 3");
+            tree.insert(key, value);
             keys.push(key);
         }
 
         tree.compute_commitment().unwrap();
+        let data = tree.get(&keys[2]).unwrap();
+        println!("entry[2]: {:?}", data);
 
-        let result = tree.get_commitments_along_path(keys[0]).unwrap();
+        let result = tree.get_commitments_along_path(&[keys[0]]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         println!("extra_data_list: {:?}", result.extra_data_list);
         assert_eq!(
-            result.commitment_elements.elements.zs[0],
-            keys[0][0] as usize
-        );
-        assert_eq!(
-            result.commitment_elements.elements.zs[4],
-            (keys[0][31] as usize * 2) % 256
-        );
-        assert_eq!(
-            result.commitment_elements.elements.zs[5],
-            (keys[0][31] as usize * 2 + 1) % 256
-        );
-        assert_eq!(
             result.commitment_elements.elements.zs,
-            [13, 0, 1, 3, 252, 253]
+            [13, 2, 0, 1, 3, 252, 253]
         );
-        assert_eq!(result.commitment_elements.elements.ys.len(), 6);
-        assert_eq!(result.commitment_elements.commitments.len(), 6);
+        assert_eq!(result.commitment_elements.elements.ys.len(), 7);
+        assert_eq!(result.commitment_elements.commitments.len(), 7);
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
             result.extra_data_list[0].ext_status % 8,
             ExtStatus::Present as usize
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
         assert!(result.extra_data_list[0].poa_stems.is_none());
 
-        tree.remove(keys[0]).unwrap();
+        tree.remove(&keys[0]);
 
         tree.compute_commitment().unwrap();
 
         let key_present_stem = keys[0];
 
-        let result = tree.get_commitments_along_path(key_present_stem).unwrap();
+        let result = tree
+            .get_commitments_along_path(&[key_present_stem])
+            .unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
-        assert_eq!(result.commitment_elements.elements.zs, [13, 0, 1, 3, 252]);
-        assert_eq!(result.commitment_elements.elements.ys.len(), 5);
-        assert_eq!(result.commitment_elements.commitments.len(), 5);
+        assert_eq!(result.commitment_elements.elements.zs, [13, 2]);
+        assert_eq!(result.commitment_elements.elements.ys.len(), 2);
+        assert_eq!(result.commitment_elements.commitments.len(), 2);
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
             result.extra_data_list[0].ext_status % 8,
-            ExtStatus::Present as usize
+            ExtStatus::AbsentEmpty as usize
         );
         assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
         assert!(result.extra_data_list[0].poa_stems.is_none());
@@ -154,7 +141,9 @@ mod tests {
             key
         };
 
-        let result = tree.get_commitments_along_path(key_absent_other).unwrap();
+        let result = tree
+            .get_commitments_along_path(&[key_absent_other])
+            .unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         assert_eq!(result.commitment_elements.elements.zs, [255, 0, 1]);
@@ -176,7 +165,9 @@ mod tests {
             key
         };
 
-        let result = tree.get_commitments_along_path(key_absent_empty).unwrap();
+        let result = tree
+            .get_commitments_along_path(&[key_absent_empty])
+            .unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         assert_eq!(result.commitment_elements.elements.zs, [5]);
         assert_eq!(result.commitment_elements.elements.ys, [Fr::zero()]);
