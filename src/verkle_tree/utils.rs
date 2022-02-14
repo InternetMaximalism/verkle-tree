@@ -77,7 +77,7 @@ where
     Ok(result)
 }
 
-pub fn fill_suffix_tree_poly<F: PrimeField>(
+pub fn fill_leaf_tree_poly<F: PrimeField>(
     dest: &mut [F],
     src: &[Option<[u8; 32]>],
 ) -> anyhow::Result<usize> {

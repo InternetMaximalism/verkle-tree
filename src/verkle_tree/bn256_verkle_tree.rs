@@ -1,6 +1,5 @@
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, PrimeField};
-use generic_array::ArrayLength;
 // use franklin_crypto::bellman::Field;
 
 use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
@@ -8,7 +7,7 @@ use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
 use super::proof::{CommitmentElements, Elements, ExtraProofData, MultiProofCommitments};
-use super::trie::{AbstractMerkleTree, VerkleNode, VerkleTree};
+use super::trie::{AbstractMerkleTree, VerkleTree};
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
@@ -19,9 +18,8 @@ pub struct VerkleProof<G: CurveProjective> {
     pub values: Vec<[u8; 32]>,
 }
 
-pub trait VerkleTreeZkp<W, G, T>
+pub trait VerkleTreeZkp<G, T>
 where
-    W: ArrayLength<Option<VerkleNode<[u8; 32], [u8; 32], G::Affine>>>,
     G: CurveProjective,
     <G::Affine as CurveAffine>::Base: PrimeField,
     T: Bn256Transcript,
@@ -43,14 +41,9 @@ where
     ) -> Result<bool, Self::Err>;
 }
 
-pub struct Bn256VerkleTree<W: ArrayLength<Option<VerkleNode<[u8; 32], [u8; 32], G1Affine>>>> {
-    _width: std::marker::PhantomData<W>,
-}
+pub struct Bn256VerkleTree;
 
-impl<W> VerkleTreeZkp<W, G1, PoseidonBn256Transcript> for Bn256VerkleTree<W>
-where
-    W: ArrayLength<Option<VerkleNode<[u8; 32], [u8; 32], G1Affine>>>,
-{
+impl VerkleTreeZkp<G1, PoseidonBn256Transcript> for Bn256VerkleTree {
     type Err = anyhow::Error;
 
     fn create_proof(

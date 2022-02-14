@@ -7,7 +7,7 @@ use crate::verkle_tree::proof::ExtraProofData;
 
 use super::path::TreePath;
 use super::proof::{CommitmentElements, Elements, MultiProofCommitments};
-use super::utils::{fill_suffix_tree_poly, leaf_to_commitments, point_to_field_element};
+use super::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
 
 pub const WIDTH: usize = 256;
 pub const LIMBS: usize = 2;
@@ -169,7 +169,7 @@ where
     V: AbstractValue,
     GA: CurveAffine,
 {
-    Suffix {
+    Leaf {
         path: K::Path,
         stem: K::Stem,
         leaves: Box<[Option<V>; WIDTH]>,
@@ -215,7 +215,7 @@ where
 {
     pub fn get_info(&self) -> &NodeInfo<GA> {
         match self {
-            Self::Suffix { info, .. } => info,
+            Self::Leaf { info, .. } => info,
             Self::Internal { info, .. } => info,
         }
     }
@@ -233,7 +233,7 @@ where
         let Entry { key, value } = entry;
         let mut leaves = [None; WIDTH];
         leaves[key.get_suffix()] = Some(value);
-        Self::Suffix {
+        Self::Leaf {
             stem: key.get_stem(),
             path,
             leaves: Box::new(leaves),
@@ -276,7 +276,7 @@ where
     pub fn insert(&mut self, encoded_key: K::Path, entry: Entry<K, V>) -> anyhow::Result<()> {
         let Entry { key, value } = entry;
         match self {
-            Self::Suffix {
+            Self::Leaf {
                 stem,
                 path,
                 leaves,
@@ -311,16 +311,16 @@ where
                 for i in 0..WIDTH {
                     if i == next_branch_of_existing_key {
                         let mut new_path = path.clone();
-                        new_path.inner.push(next_branch_of_existing_key.clone());
-                        let moving_child = Self::Suffix {
+                        new_path.inner.push(next_branch_of_existing_key);
+                        let moving_child = Self::Leaf {
                             stem: stem.clone(),
                             path: new_path,
                             leaves: leaves.clone(),
                             s_commitments: s_commitments.clone(),
                             info: NodeInfo {
-                                commitment: commitment.clone(),
-                                digest: digest.clone(),
-                                num_nonempty_children: num_nonempty_children.clone(),
+                                commitment: *commitment,
+                                digest: *digest,
+                                num_nonempty_children: *num_nonempty_children,
                             },
                         };
                         children.push(Some(moving_child));
@@ -348,7 +348,7 @@ where
                     leaves[key.get_suffix()] = Some(value);
                     let mut new_path = path.clone();
                     new_path.inner.push(next_branch_of_inserting_key);
-                    let leaf_node = Self::Suffix {
+                    let leaf_node = Self::Leaf {
                         stem: stem.clone(),
                         path: new_path,
                         leaves,
@@ -376,7 +376,7 @@ where
                             );
                             *num_nonempty_children += 1;
                         }
-                        Self::Suffix { .. } => {
+                        Self::Leaf { .. } => {
                             panic!("unreachable code");
                         }
                     }
@@ -412,19 +412,13 @@ where
                 } else {
                     Ok(())
                 }
-                // match &mut children[next_branch] {
-                //     Some(child) => child.insert(TreePath::from(&encoded_key.clone()[1..]), entry),
-                //     None => {
-                //         panic!("unreachable code");
-                //     }
-                // }
             }
         }
     }
 
     pub fn remove(&mut self, encoded_key: K::Path, key: K) -> anyhow::Result<()> {
         match self {
-            Self::Suffix {
+            Self::Leaf {
                 leaves,
                 info:
                     NodeInfo {
@@ -476,7 +470,7 @@ where
     /// Get a value from this tree.
     pub fn get_value(&self, encoded_key: K::Path, key: K) -> anyhow::Result<Option<V>> {
         match &self {
-            Self::Suffix { stem, leaves, .. } => {
+            Self::Leaf { stem, leaves, .. } => {
                 if key.get_stem() != stem.clone() {
                     Ok(None)
                 } else {
@@ -497,7 +491,7 @@ where
     /// `witness` is an entry corresponding "the nearest" key to the given one.
     fn _get_witness(&self, encoded_key: K::Path, key: K) -> anyhow::Result<(K::Path, V)> {
         match &self {
-            Self::Suffix { stem, leaves, .. } => {
+            Self::Leaf { stem, leaves, .. } => {
                 if key.get_stem() != stem.clone() {
                     todo!();
                 }
@@ -547,7 +541,7 @@ where
     let mut s_commitments = vec![];
     for limb in leaves.chunks(limb_bits_size) {
         let mut sub_poly = vec![GA::Scalar::zero(); width];
-        let _count = fill_suffix_tree_poly(&mut sub_poly, limb)?;
+        let _count = fill_leaf_tree_poly(&mut sub_poly, limb)?;
         let tmp_s_commitment = committer
             .commit(&sub_poly /* , width - count */)
             .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
@@ -586,7 +580,7 @@ where
         }
 
         match self {
-            Self::Suffix {
+            Self::Leaf {
                 stem,
                 leaves,
                 s_commitments,
@@ -643,7 +637,7 @@ where
         keys: &[K],
     ) -> anyhow::Result<MultiProofCommitments<K, GA>> {
         match self {
-            Self::Suffix {
+            Self::Leaf {
                 path,
                 stem,
                 leaves,
@@ -713,7 +707,7 @@ where
                     let suffix_slot = 2 + limb_index;
                     let mut s_poly = vec![zero; width];
                     let start_index = limb_index * limb_bits_size;
-                    let count = fill_suffix_tree_poly(
+                    let count = fill_leaf_tree_poly(
                         &mut s_poly,
                         &leaves[start_index..(start_index + limb_bits_size)],
                     )?;
@@ -727,7 +721,7 @@ where
                     if count == 0 {
                         // TODO: maintain a count variable at LeafNode level
                         // so that we know not to build the polynomials in this case,
-                        // as all the information is available before fillSuffixTreePoly
+                        // as all the information is available before fill_leaf_tree_poly
                         // has to be called, save the count.
                         debug_assert_eq!(poly[suffix_slot], zero);
                         multi_proof_commitments.merge(&mut MultiProofCommitments {
@@ -752,7 +746,7 @@ where
                     if leaves[suffix].is_none() {
                         // Proof of absence: case of a missing value.
                         //
-                        // Suffix tree is present as a child of the extension,
+                        // Leaf tree is present as a child of the extension,
                         // but does not contain the requested suffix. This can
                         // only happen when the leaf has never been written to
                         // since after deletion the value would be set to zero

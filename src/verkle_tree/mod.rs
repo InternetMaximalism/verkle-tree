@@ -8,7 +8,6 @@ pub mod utils;
 mod tests {
     use franklin_crypto::bellman::bn256::{Fr, G1Affine};
     use franklin_crypto::bellman::Field;
-    use generic_array::typenum::U256;
 
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
     use crate::verkle_tree::{
@@ -31,15 +30,11 @@ mod tests {
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
-        let proof = Bn256VerkleTree::<U256>::create_proof(&tree, &[key], &tree.committer).unwrap();
+        let proof = Bn256VerkleTree::create_proof(&tree, &[key], &tree.committer).unwrap();
 
-        let success = Bn256VerkleTree::<U256>::check_proof(
-            proof.0,
-            &proof.1.zs,
-            &proof.1.ys,
-            &tree.committer,
-        )
-        .unwrap();
+        let success =
+            Bn256VerkleTree::check_proof(proof.0, &proof.1.zs, &proof.1.ys, &tree.committer)
+                .unwrap();
 
         assert!(
             success,
