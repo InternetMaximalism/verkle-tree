@@ -208,7 +208,10 @@ where
     pub fn new(domain_size: usize) -> Self {
         let start = std::time::Instant::now();
         let srs = generate_random_points::<G>(domain_size).unwrap();
-        println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
+        println!(
+            "generate srs: {} s",
+            start.elapsed().as_micros() as f64 / 1000000.0
+        );
         let q = <G::Affine as CurveAffine>::one();
         let precomputed_weights = PrecomputedWeights::new(domain_size);
 
@@ -220,8 +223,16 @@ where
     }
 }
 
-impl<G: CurveProjective> IpaConfig<G> {
-    pub fn commit(
+pub trait Committer<GA: CurveAffine> {
+    type Err: Send + Sync + 'static;
+
+    fn commit(&self, polynomial: &[GA::Scalar]) -> Result<GA, Self::Err>;
+}
+
+impl<G: CurveProjective> Committer<G::Affine> for IpaConfig<G> {
+    type Err = anyhow::Error;
+
+    fn commit(
         &self,
         polynomial: &[<G::Affine as CurveAffine>::Scalar],
     ) -> anyhow::Result<G::Affine> {
@@ -232,7 +243,8 @@ impl<G: CurveProjective> IpaConfig<G> {
                 .map(|x| x.into_projective())
                 .collect::<Vec<_>>(),
             polynomial,
-        )?
+        )
+        .unwrap()
         .into_affine();
 
         Ok(result)

@@ -1,7 +1,7 @@
 use ff_utils::bn256_fr::Bn256Fr;
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
 use franklin_crypto::bellman::pairing::{CurveAffine, Engine};
-use franklin_crypto::bellman::{CurveProjective, PrimeField};
+use franklin_crypto::bellman::PrimeField;
 use generic_array::typenum;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
@@ -13,7 +13,7 @@ pub trait Bn256Transcript: Sized + Clone {
 
     fn new(init_state: &Fr) -> Self;
     fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()>;
-    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1) -> anyhow::Result<()>;
+    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1Affine) -> anyhow::Result<()>;
     fn into_params(self) -> Self::Params;
     fn get_challenge(&self) -> Fr;
 }
@@ -61,8 +61,8 @@ impl Bn256Transcript for PoseidonBn256Transcript {
         Ok(())
     }
 
-    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1) -> anyhow::Result<()> {
-        let (point_x, point_y) = point.into_affine().into_xy_unchecked();
+    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1Affine) -> anyhow::Result<()> {
+        let (point_x, point_y) = point.into_xy_unchecked();
         let point_bytes_x = write_field_element_le(&point_x);
         self.commit_bytes(&point_bytes_x)?;
         let point_y_bytes = write_field_element_le(&point_y);
