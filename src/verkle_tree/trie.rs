@@ -7,7 +7,6 @@ use crate::ipa_fr::config::{Committer, IpaConfig};
 use crate::ipa_fr::utils::read_field_element_le;
 use crate::verkle_tree::proof::ExtraProofData;
 
-use super::path::TreePath;
 use super::proof::{CommitmentElements, Elements, MultiProofCommitments};
 use super::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
 
@@ -29,12 +28,14 @@ pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
     fn get_suffix(&self) -> usize;
 
     fn to_path(&self) -> Self::Path;
+
+    fn get_branch_at(&self, depth: usize) -> usize;
 }
 
 // 32 bytes key
 impl AbstractKey for [u8; 32] {
     type Stem = Option<[u8; 31]>;
-    type Path = TreePath;
+    type Path = Vec<usize>;
 
     fn get_stem(&self) -> Option<[u8; 31]> {
         let result: [u8; 31] = self[..31].to_vec().try_into().unwrap();
@@ -46,8 +47,12 @@ impl AbstractKey for [u8; 32] {
         usize::from(self[31])
     }
 
-    fn to_path(&self) -> TreePath {
-        TreePath::from(self.to_vec())
+    fn to_path(&self) -> Vec<usize> {
+        self.iter().map(|&x| x as usize).collect::<Vec<_>>()
+    }
+
+    fn get_branch_at(&self, depth: usize) -> usize {
+        self[depth] as usize
     }
 }
 
@@ -56,10 +61,13 @@ pub trait AbstractValue: Clone + Copy + Debug + PartialEq + Eq {}
 // 32 bytes value
 impl AbstractValue for [u8; 32] {}
 
-pub trait AbstractPath: Sized + Debug + PartialEq + Eq + IntoIterator {
-    type RemovePrefixError: Send + Sync + 'static;
+pub trait AbstractPath:
+    Sized + Clone + Debug + Default + PartialEq + Eq + IntoIterator<Item = usize>
+// + std::ops::Index<usize, Output = usize>
+{
+    type RemovePrefixError: Debug + Send + Sync + 'static;
 
-    fn get_next_branch(&self) -> usize;
+    fn get_next_path_and_branch(&self) -> (Self, usize);
 
     fn get_suffix(&self) -> usize;
 
@@ -71,16 +79,26 @@ pub trait AbstractPath: Sized + Debug + PartialEq + Eq + IntoIterator {
     fn is_proper_prefix_of(&self, full_path: &Self) -> bool;
 
     fn remove_prefix(&self, prefix: &Self) -> Result<Self, Self::RemovePrefixError>;
+
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn push(&mut self, value: usize);
 }
 
-impl AbstractPath for TreePath {
+impl AbstractPath for Vec<usize> {
     type RemovePrefixError = anyhow::Error;
 
-    fn get_next_branch(&self) -> usize {
-        let branch = self[0];
-        assert!(branch < WIDTH);
+    fn get_next_path_and_branch(&self) -> (Self, usize) {
+        let next_branch = *self.first().expect("`next_branch` must be a value.");
+        assert!(next_branch < WIDTH);
 
-        branch
+        let next_path = self[1..].to_vec();
+
+        (next_path, next_branch)
     }
 
     fn get_suffix(&self) -> usize {
@@ -105,23 +123,29 @@ impl AbstractPath for TreePath {
             return false;
         }
 
-        let base_path = full_path[..self.len()].to_vec();
-
-        self.inner == base_path
+        full_path[..self.len()].eq(self)
     }
 
     fn remove_prefix(&self, prefix: &Self) -> anyhow::Result<Self> {
         if !prefix.is_proper_prefix_of(self) {
-            anyhow::bail!(
-                "{:?} is not proper prefix of {:?}",
-                prefix.inner,
-                self.inner,
-            );
+            anyhow::bail!("{:?} is not proper prefix of {:?}", prefix, self,);
         }
 
         let result = Self::from(&self[prefix.len()..]);
 
         Ok(result)
+    }
+
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Vec::is_empty(self)
+    }
+
+    fn push(&mut self, value: usize) {
+        Vec::push(self, value)
     }
 }
 
@@ -132,16 +156,15 @@ pub trait AbstractStem: Clone + Debug + PartialEq + Eq {
 }
 
 impl AbstractStem for Option<[u8; 31]> {
-    type Path = TreePath;
+    type Path = Vec<usize>;
 
-    fn to_path(&self) -> TreePath {
+    fn to_path(&self) -> Vec<usize> {
         let bytes = match self {
             Some(inner) => inner.to_vec(),
             None => vec![],
         };
-        TreePath {
-            inner: bytes.iter().map(|x| *x as usize).collect::<Vec<_>>(),
-        }
+
+        bytes.iter().map(|x| *x as usize).collect::<Vec<_>>()
     }
 }
 
@@ -264,17 +287,18 @@ where
     }
 }
 
-impl<K, V, GA> VerkleNode<K, V, GA>
+impl<P, K, V, GA> VerkleNode<K, V, GA>
 where
-    K: AbstractKey<Path = TreePath>,
-    K::Stem: AbstractStem<Path = TreePath> + IntoFieldElement<GA::Scalar>,
+    P: Default + AbstractPath,
+    K: AbstractKey<Path = P>,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
     V: AbstractValue,
     GA: CurveAffine,
     <GA as CurveAffine>::Base: PrimeField,
 {
     pub fn insert(&mut self, relative_path: K::Path, key: K, value: V) -> Option<V> {
         if relative_path.is_empty() {
-            anyhow::anyhow!("`relative_path` must be non-empty.");
+            panic!("`relative_path` must be non-empty.");
         }
 
         match self {
@@ -291,7 +315,14 @@ where
                     },
                 ..
             } => {
-                if key.get_stem() == stem.clone() || path.clone() == stem.to_path() {
+                let stem_relative_path = stem
+                    .to_path()
+                    .remove_prefix(path)
+                    .expect("unreachable code");
+                if stem_relative_path.is_empty() {
+                    panic!("`relative_path` must be non-empty.");
+                }
+                if key.get_stem().eq(stem) {
                     let _ = commitment.take();
                     let _ = digest.take();
                     let old_leaf = leaves.insert(key.get_suffix(), value);
@@ -305,12 +336,11 @@ where
                 // A new branch node has to be inserted. Depending
                 // on the next branch in both keys, a recursion into
                 // the moved leaf node can occur.
-                let depth = path.len();
-                let next_branch_of_existing_key =
-                    TreePath::from(&stem.to_path()[depth..]).get_next_branch();
+                let (_, next_branch_of_existing_key) =
+                    stem_relative_path.get_next_path_and_branch();
                 let mut children = HashMap::new();
                 let mut new_path = path.clone();
-                new_path.inner.push(next_branch_of_existing_key);
+                new_path.push(next_branch_of_existing_key);
                 let moving_child = VerkleNode::Leaf {
                     stem: stem.clone(),
                     path: new_path,
@@ -334,14 +364,14 @@ where
                     },
                 };
 
-                let next_branch_of_inserting_key = relative_path.get_next_branch();
+                let (_, next_branch_of_inserting_key) = relative_path.get_next_path_and_branch();
                 if next_branch_of_inserting_key != next_branch_of_existing_key {
                     // Next branch differs, so this was the last level.
                     // Insert it directly into its suffix.
                     let mut leaves = HashMap::new();
                     leaves.insert(key.get_suffix(), value);
                     let mut new_path = path.clone();
-                    new_path.inner.push(next_branch_of_inserting_key);
+                    new_path.push(next_branch_of_inserting_key);
                     let leaf_node = VerkleNode::Leaf {
                         stem: key.get_stem(),
                         path: new_path,
@@ -391,17 +421,13 @@ where
                 let _ = commitment.take();
                 let _ = digest.take();
 
-                let next_relative_path = TreePath::from(&relative_path[1..]);
-                if next_relative_path.is_empty() {
-                    anyhow::anyhow!("`relative_path` must be non-empty.");
-                }
-
-                let next_branch_of_inserting_key = relative_path.get_next_branch();
+                let (next_relative_path, next_branch_of_inserting_key) =
+                    relative_path.get_next_path_and_branch();
                 if let Some(child) = children.get_mut(&next_branch_of_inserting_key) {
                     child.insert(next_relative_path, key, value)
                 } else {
                     let mut new_path = path.clone();
-                    new_path.inner.push(next_branch_of_inserting_key);
+                    new_path.push(next_branch_of_inserting_key);
                     children.insert(
                         next_branch_of_inserting_key,
                         VerkleNode::new_leaf_node(new_path, key, value),
@@ -444,9 +470,10 @@ where
                 let _ = commitment.take();
                 let _ = digest.take();
 
-                let next_branch = relative_path.get_next_branch();
+                let (next_path, next_branch) = relative_path.get_next_path_and_branch();
+
                 if let Some(child) = children.get_mut(&next_branch) {
-                    let old_value = child.remove(TreePath::from(&relative_path[1..]), key);
+                    let old_value = child.remove(next_path, key);
 
                     // Remove a empty node if any.
                     if child.get_info().num_nonempty_children == 0 {
@@ -472,11 +499,10 @@ where
                 }
             }
             Self::Internal { children, .. } => {
-                if let Some(child) = children.get(&relative_path.get_next_branch()) {
-                    child.get(TreePath::from(&relative_path[1..]), key)
-                } else {
-                    None
-                }
+                let (next_path, next_branch) = relative_path.get_next_path_and_branch();
+                children
+                    .get(&next_branch)
+                    .and_then(|child| child.get(next_path, key))
             }
         }
     }
@@ -501,8 +527,9 @@ where
                 }
             }
             Self::Internal { children, .. } => {
-                if let Some(child) = children.get(&relative_path.get_next_branch()) {
-                    child.get_witness(TreePath::from(&relative_path[1..]), key)
+                let (next_path, next_branch) = relative_path.get_next_path_and_branch();
+                if let Some(child) = children.get(&next_branch) {
+                    child.get_witness(next_path, key)
                 } else {
                     todo!()
                 }
@@ -511,7 +538,7 @@ where
     }
 }
 
-pub fn compute_commitment_of_leaf_node<K, GA, C>(
+pub(crate) fn compute_commitment_of_leaf_node<K, GA, C>(
     committer: &C,
     stem: &mut K::Stem,
     leaves: &mut HashMap<usize, [u8; 32]>,
@@ -558,7 +585,7 @@ where
     Ok((s_commitments, tmp_commitment))
 }
 
-pub fn compute_commitment_of_internal_node<GA: CurveAffine, C: Committer<GA>>(
+pub(crate) fn compute_commitment_of_internal_node<GA: CurveAffine, C: Committer<GA>>(
     committer: &C,
     children_digests: Vec<GA::Scalar>,
 ) -> anyhow::Result<GA> {
@@ -567,10 +594,11 @@ pub fn compute_commitment_of_internal_node<GA: CurveAffine, C: Committer<GA>>(
         .or_else(|_| anyhow::bail!("Fail to make a commitment of given polynomial."))
 }
 
-impl<K, GA> VerkleNode<K, [u8; 32], GA>
+impl<P, K, GA> VerkleNode<K, [u8; 32], GA>
 where
-    K: AbstractKey<Path = TreePath>,
-    K::Stem: AbstractStem<Path = TreePath> + IntoFieldElement<GA::Scalar>,
+    P: Default + AbstractPath,
+    K: AbstractKey<Path = P>,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -830,7 +858,7 @@ where
                 }
 
                 for group in groups.clone() {
-                    let zi = group[0].to_path()[depth];
+                    let zi = group[0].get_branch_at(depth);
 
                     // Build the list of elements for this level
                     let yi = fi.clone()[zi];
@@ -849,7 +877,7 @@ where
                 // Loop over again, collecting the children's proof elements
                 // This is because the order is breadth-first.
                 for group in groups {
-                    let child = children.get(&group[0].to_path()[depth]);
+                    let child = children.get(&group[0].get_branch_at(depth));
                     if let Some(child) = child {
                         multi_proof_commitments
                             .merge(&mut child.get_commitments_along_path(&group)?);
@@ -871,8 +899,12 @@ where
     }
 }
 
-// groupKeys groups a set of keys based on their byte at a given depth.
-fn group_keys<K: AbstractKey<Path = TreePath>>(keys: &[K], depth: usize) -> Vec<Vec<K>> {
+/// `group_keys` groups a set of keys based on their byte at a given depth.
+fn group_keys<P, K>(keys: &[K], depth: usize) -> Vec<Vec<K>>
+where
+    P: Default + AbstractPath,
+    K: AbstractKey<Path = P>,
+{
     // special case: only one key left
     if keys.len() == 1 {
         return vec![keys.to_vec()];
@@ -883,8 +915,8 @@ fn group_keys<K: AbstractKey<Path = TreePath>>(keys: &[K], depth: usize) -> Vec<
     let mut first_key = 0;
     for last_key in 1..keys.len() {
         let key = keys[last_key];
-        let key_idx = key.to_path()[depth];
-        let prev_idx = keys[last_key - 1].to_path()[depth];
+        let key_idx = key.get_branch_at(depth);
+        let prev_idx = keys[last_key - 1].get_branch_at(depth);
 
         if key_idx != prev_idx {
             groups.push(keys[first_key..last_key].to_vec());
