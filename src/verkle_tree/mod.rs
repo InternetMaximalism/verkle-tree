@@ -1,19 +1,26 @@
+use franklin_crypto::bellman::bn256::G1Affine;
+
+use self::trie::VerkleTree;
+
 pub mod bn256_verkle_tree;
 pub mod proof;
 pub mod trie;
 pub mod utils;
 
+pub type VerkleTreeWith32BytesKey = VerkleTree<[u8; 32], G1Affine>;
+
 #[cfg(test)]
-mod tests {
-    use franklin_crypto::bellman::bn256::{Fr, G1Affine};
+mod verkle_tree_tests {
+    use franklin_crypto::bellman::bn256::Fr;
     use franklin_crypto::bellman::Field;
 
+    use crate::verkle_tree::bn256_verkle_tree::VerkleProof;
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
-    use crate::verkle_tree::{bn256_verkle_tree::VerkleProof, trie::VerkleTree};
+    use crate::verkle_tree::VerkleTreeWith32BytesKey;
 
     #[test]
     fn test_verkle_verification_with_one_entry() {
-        let mut tree = VerkleTree::<G1Affine>::default();
+        let mut tree = VerkleTreeWith32BytesKey::default();
         let mut key = [0u8; 32];
         key[0] = 13;
         let mut value = [0u8; 32];
@@ -39,8 +46,8 @@ mod tests {
     }
 
     #[test]
-    fn test_verkle_tree_with_three_entries() {
-        let mut tree = VerkleTree::<G1Affine>::default();
+    fn test_verkle_tree_with_some_entries() {
+        let mut tree = VerkleTreeWith32BytesKey::default();
         let mut keys = vec![];
         {
             let mut key = [0u8; 32];

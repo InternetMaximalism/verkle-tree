@@ -1,5 +1,5 @@
-use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
-use franklin_crypto::bellman::CurveProjective;
+use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine};
+use franklin_crypto::bellman::CurveAffine;
 // use franklin_crypto::bellman::Field;
 
 use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
@@ -7,21 +7,29 @@ use crate::ipa_fr::config::IpaConfig;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
 use super::proof::{CommitmentElements, Elements, ExtraProofData, MultiProofCommitments};
-use super::trie::VerkleTree;
+use super::trie::{AbstractKey, AbstractStem, IntoFieldElement, VerkleTree};
 
 #[derive(Clone, Debug)]
-pub struct VerkleProof<G: CurveProjective> {
-    pub multi_proof: MultiProof<G>,  // multi-point argument
-    pub commitments: Vec<G::Affine>, // commitments, sorted by their path in the tree
-    pub extra_data_list: Vec<ExtraProofData<[u8; 32]>>,
-    pub keys: Vec<[u8; 32]>,
+pub struct VerkleProof<K, GA>
+where
+    K: AbstractKey,
+    GA: CurveAffine,
+{
+    pub multi_proof: MultiProof<GA>, // multi-point argument
+    pub commitments: Vec<GA>,        // commitments, sorted by their path in the tree
+    pub extra_data_list: Vec<ExtraProofData<K>>,
+    pub keys: Vec<K>,
     pub values: Vec<[u8; 32]>,
 }
 
-impl VerkleProof<G1> {
+impl<K> VerkleProof<K, G1Affine>
+where
+    K: AbstractKey<Path = Vec<usize>>,
+    K::Stem: AbstractStem<Path = Vec<usize>> + IntoFieldElement<Fr>,
+{
     pub fn create(
-        tree: &mut VerkleTree<G1Affine>,
-        keys: &[[u8; 32]],
+        tree: &mut VerkleTree<K, G1Affine>,
+        keys: &[K],
     ) -> anyhow::Result<(Self, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         tree.compute_commitment()?;
@@ -62,7 +70,12 @@ impl VerkleProof<G1> {
         Ok((proof, elements))
     }
 
-    pub fn check(&self, zs: &[usize], ys: &[Fr], ipa_conf: &IpaConfig<G1>) -> anyhow::Result<bool> {
+    pub fn check(
+        &self,
+        zs: &[usize],
+        ys: &[Fr],
+        ipa_conf: &IpaConfig<G1Affine>,
+    ) -> anyhow::Result<bool> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         Bn256BatchProof::check_proof(
             self.multi_proof.clone(),

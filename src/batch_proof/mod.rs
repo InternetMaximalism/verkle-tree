@@ -8,27 +8,27 @@ use crate::ipa_fr::utils::read_field_element_le;
 use crate::ipa_fr::{Bn256Ipa, Ipa};
 
 #[derive(Clone, Debug)]
-pub struct MultiProof<G: CurveProjective> {
-    pub ipa: IpaProof<G>,
-    pub d: G::Affine,
+pub struct MultiProof<GA: CurveAffine> {
+    pub ipa: IpaProof<GA>,
+    pub d: GA,
 }
 
-pub trait BatchProof<G: CurveProjective, T: Bn256Transcript> {
+pub trait BatchProof<GA: CurveAffine, T: Bn256Transcript> {
     fn create_proof(
-        commitments: &[G::Affine],
-        fs: &[Vec<G::Scalar>],
+        commitments: &[GA],
+        fs: &[Vec<GA::Scalar>],
         zs: &[usize],
         transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<MultiProof<G>>;
+        ipa_conf: &IpaConfig<GA>,
+    ) -> anyhow::Result<MultiProof<GA>>;
 
     fn check_proof(
-        proof: MultiProof<G>,
-        commitments: &[G::Affine],
-        ys: &[G::Scalar],
+        proof: MultiProof<GA>,
+        commitments: &[GA],
+        ys: &[GA::Scalar],
         zs: &[usize],
         transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
+        ipa_conf: &IpaConfig<GA>,
     ) -> anyhow::Result<bool>;
 }
 
@@ -36,7 +36,7 @@ pub struct Bn256BatchProof;
 
 #[cfg(test)]
 mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
+    use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine};
 
     use super::{BatchProof, Bn256BatchProof};
     use crate::ipa_fr::config::Committer;
@@ -48,7 +48,7 @@ mod tests {
         // Shared View
         println!("create ipa_conf");
         let domain_size = 256;
-        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let ipa_conf = &IpaConfig::<G1Affine>::new(domain_size);
 
         // Prover view
         let poly_1 = test_poly::<Fr>(&[12, 97, 37, 0, 1, 208, 132, 3], domain_size);
@@ -91,14 +91,14 @@ mod tests {
     }
 }
 
-impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
+impl BatchProof<G1Affine, PoseidonBn256Transcript> for Bn256BatchProof {
     fn create_proof(
         commitments: &[G1Affine],
         fs: &[Vec<Fr>],
         zs: &[usize],
         transcript_params: Fr,
-        ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<MultiProof<G1>> {
+        ipa_conf: &IpaConfig<G1Affine>,
+    ) -> anyhow::Result<MultiProof<G1Affine>> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         if commitments.len() != fs.len() {
@@ -222,12 +222,12 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
     }
 
     fn check_proof(
-        proof: MultiProof<G1>,
+        proof: MultiProof<G1Affine>,
         commitments: &[G1Affine],
         ys: &[Fr],
         zs: &[usize],
         transcript_params: Fr,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<bool> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 

@@ -4,7 +4,7 @@ pub mod rns;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
+use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
 use crate::ipa_fr::utils::log2_ceil;
@@ -25,24 +25,24 @@ use self::utils::{commit, fold_points, fold_scalars, inner_prod};
 /// `eval_point` and `inner_prod` are elements in `G::Scalar`.
 ///
 /// `transcript_params` is a initialization parameter of the transcript `T`.
-pub trait Ipa<G: CurveProjective, T: Bn256Transcript> {
+pub trait Ipa<GA: CurveAffine, T: Bn256Transcript> {
     /// Create a proof which shows `inner_prod = f(eval_point)`.
     fn create_proof(
-        commitment: G::Affine,
-        lagrange_poly: &[<G as CurveProjective>::Scalar],
-        eval_point: <G as CurveProjective>::Scalar,
+        commitment: GA,
+        lagrange_poly: &[GA::Scalar],
+        eval_point: GA::Scalar,
         transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<(IpaProof<G>, G::Scalar)>;
+        ipa_conf: &IpaConfig<GA>,
+    ) -> anyhow::Result<(IpaProof<GA>, GA::Scalar)>;
 
     /// Verify given `proof`.
     fn check_proof(
-        commitment: G::Affine,
-        proof: IpaProof<G>,
-        eval_point: <G as CurveProjective>::Scalar,
-        inner_prod: <G as CurveProjective>::Scalar,
+        commitment: GA,
+        proof: IpaProof<GA>,
+        eval_point: GA::Scalar,
+        inner_prod: GA::Scalar,
         transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
+        ipa_conf: &IpaConfig<GA>,
     ) -> anyhow::Result<bool>;
 }
 
@@ -50,11 +50,11 @@ pub struct Bn256Ipa;
 
 #[cfg(test)]
 mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
+    use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine};
 
     use super::config::{Committer, IpaConfig};
     use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-    use super::utils::{inner_prod, read_field_element_le, test_poly};
+    use super::utils::{read_field_element_le, test_poly};
     use super::{Bn256Ipa, Ipa};
 
     #[test]
@@ -66,7 +66,7 @@ mod tests {
         let poly = vec![12, 97];
         // let poly = vec![12, 97, 37, 0, 1, 208, 132, 3];
         let domain_size = poly.len();
-        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let ipa_conf = &IpaConfig::<G1Affine>::new(domain_size);
 
         let padded_poly = test_poly::<Fr>(&poly, domain_size);
         let prover_commitment = ipa_conf.commit(&padded_poly).unwrap();
@@ -106,14 +106,14 @@ mod tests {
     }
 }
 
-impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
+impl Ipa<G1Affine, PoseidonBn256Transcript> for Bn256Ipa {
     fn create_proof(
         commitment: G1Affine,
         lagrange_poly: &[Fr],
         eval_point: Fr,
         transcript_params: Fr,
-        ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<(IpaProof<G1>, Fr)> {
+        ipa_conf: &IpaConfig<G1Affine>,
+    ) -> anyhow::Result<(IpaProof<G1Affine>, Fr)> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf
             .get_srs()
@@ -230,11 +230,11 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
 
     fn check_proof(
         commitment: G1Affine,
-        proof: IpaProof<G1>,
+        proof: IpaProof<G1Affine>,
         eval_point: Fr,
         ip: Fr, // inner_prod
         transcript_params: Fr,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<bool> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
