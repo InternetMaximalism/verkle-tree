@@ -11,7 +11,7 @@ use super::trie::VerkleTree;
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
-    pub multi_proof: MultiProof<G>,  // multipoint argument
+    pub multi_proof: MultiProof<G>,  // multi-point argument
     pub commitments: Vec<G::Affine>, // commitments, sorted by their path in the tree
     pub extra_data_list: Vec<ExtraProofData<[u8; 32]>>,
     pub keys: Vec<[u8; 32]>,

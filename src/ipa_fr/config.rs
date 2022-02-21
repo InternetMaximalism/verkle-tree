@@ -1,73 +1,35 @@
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field, PrimeField};
 
-use super::utils::{commit, generate_random_points, log2_ceil, read_field_element_le};
+use super::utils::{commit, generate_random_points, read_field_element_le};
 
-// pub const NUM_IPA_ROUNDS: usize = 1; // log_2(common.POLY_DEGREE);
-// pub const DOMAIN_SIZE: usize = 2; // common.POLY_DEGREE;
-
-// computes A'(x_j) where x_j must be an element in the domain
-// This is computed as the product of x_j - x_i where x_i is an element in the domain
-// and x_i is not equal to x_j
-pub fn compute_barycentric_weight_for_element<F: PrimeField>(
-    element: usize,
-    domain_size: usize,
-) -> F {
-    assert!(
-        element < domain_size,
-        "the domain is [0, {}], {} is not in the domain",
-        domain_size - 1,
-        element
-    );
-
-    let domain_element_fr = read_field_element_le::<F>(&element.to_le_bytes()).unwrap();
-
-    let mut total = F::one();
-
-    for i in 0..domain_size {
-        if i == element {
-            continue;
-        }
-
-        let i_fr = read_field_element_le::<F>(&i.to_le_bytes()).unwrap();
-
-        let mut tmp = domain_element_fr;
-        tmp.sub_assign(&i_fr);
-        total.mul_assign(&tmp);
-    }
-
-    total
-}
-
+/// `num_ipa_rounds` is a integer.
+/// `domain_size` is equal to 2^`num_ipa_rounds`.
+///
+/// `barycentric_weights` stores A'(x_i) and 1 / A'(x_i).
+///
+/// `inverted_domain` stores 1/k and -1/k for k in [0, `domain_size`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrecomputedWeights<F: PrimeField> {
-    // This stores A'(x_i) and 1/A'(x_i)
-    pub barycentric_weights: Vec<F>,
-    // This stores 1/k and -1/k for k \in [0, 255]
-    pub inverted_domain: Vec<F>,
-    pub num_ipa_rounds: u32,
+    barycentric_weights: Vec<F>,
+    inverted_domain: Vec<F>,
+    domain_size: usize,
 }
 
 impl<F: PrimeField> PrecomputedWeights<F> {
     fn new(domain_size: usize) -> Self {
-        // Imagine we have two arrays of the same length and we concatenate them together
-        // This is how we will store the A'(x_i) and 1/A'(x_i)
-        // This midpoint variable is used to compute the offset that we need
-        // to place 1/A'(x_i)
-        let midpoint = domain_size;
-
-        // Note there are DOMAIN_SIZE number of weights, but we are also storing their inverses
-        // so we need double the amount of space
-        let mut barycentric_weights = vec![<F as Field>::zero(); midpoint * 2];
-        for i in 0..midpoint {
+        // Note there are `domain_size` number of weights, but we are also storing their inverses
+        // so we need double the amount of space.
+        let mut barycentric_weights = vec![<F as Field>::zero(); domain_size * 2];
+        for i in 0..domain_size {
             let weight: F = compute_barycentric_weight_for_element(i, domain_size);
             let inv_weight = weight.inverse().unwrap();
 
             barycentric_weights[i] = weight;
-            barycentric_weights[i + midpoint] = inv_weight;
+            barycentric_weights[i + domain_size] = inv_weight;
         }
 
-        // Computing 1/k and -1/k for k \in [0, 255]
-        // Note that since we cannot do 1/0, we have one less element
+        // Computing 1/k and -1/k for k in [0, domain_size - 1].
+        // Note that since we cannot do 1/0, we have one less element.
         let midpoint = domain_size - 1;
         let mut inverted_domain = vec![<F as Field>::zero(); midpoint * 2];
         for i in 1..domain_size {
@@ -81,22 +43,31 @@ impl<F: PrimeField> PrecomputedWeights<F> {
             inverted_domain[(i - 1) + midpoint] = negative_k;
         }
 
-        let num_ipa_rounds = log2_ceil(domain_size);
-
         Self {
             barycentric_weights,
             inverted_domain,
-            num_ipa_rounds,
+            domain_size,
         }
     }
 
-    // Computes the coefficients `barycentric_coeffs` for a point `z` such that
-    // when we have a polynomial `p` in lagrange basis, the inner product of `p` and `barycentric_coeffs`
-    // is equal to p(z)
-    // Note that `z` should not be in the domain
-    // This can also be seen as the lagrange coefficients L_i(point)
+    pub fn get_domain_size(&self) -> usize {
+        self.domain_size
+    }
+
+    pub fn get_barycentric_weights(&self) -> &Vec<F> {
+        &self.barycentric_weights
+    }
+
+    pub fn get_inverted_domain(&self) -> &Vec<F> {
+        &self.inverted_domain
+    }
+
+    /// Computes the coefficients `barycentric_coeffs` for a point `z` such that
+    /// when we have a polynomial `p` in lagrange basis, the inner product of `p` and `barycentric_coeffs`
+    /// is equal to p(z).
+    /// Note that `z` should not be in the domain.
     pub fn compute_barycentric_coefficients(&self, point: &F) -> anyhow::Result<Vec<F>> {
-        let domain_size = 2usize.pow(self.num_ipa_rounds);
+        let domain_size = self.get_domain_size();
 
         // Compute A(x_i) * point - x_i
         let mut lagrange_evals: Vec<F> = Vec::with_capacity(domain_size);
@@ -154,9 +125,9 @@ impl<F: PrimeField> PrecomputedWeights<F> {
         result
     }
 
-    // Computes f(x) - f(x_i) / x - x_i where x_i is an element in the domain.
+    /// Computes (f(x) - f(x_i)) / (x - x_i) where x_i is an element in the domain.
     pub fn divide_on_domain(&self, index: usize, f: &[F]) -> Vec<F> {
-        let domain_size = 2usize.pow(self.num_ipa_rounds);
+        let domain_size = self.get_domain_size();
 
         let mut quotient = vec![<F as Field>::zero(); domain_size];
 
@@ -185,7 +156,40 @@ impl<F: PrimeField> PrecomputedWeights<F> {
     }
 }
 
-// Return (|a - b|, a < b).
+/// Computes A'(x_j) where x_j is an element in [0, domain_size).
+// This is computed as the product of x_j - x_i where x_i is an element in the domain
+// and x_i is not equal to x_j.
+pub fn compute_barycentric_weight_for_element<F: PrimeField>(
+    element: usize,
+    domain_size: usize,
+) -> F {
+    assert!(
+        element < domain_size,
+        "The domain is [0, {}], {} is not in the domain.",
+        domain_size - 1,
+        element
+    );
+
+    let domain_element_fr = read_field_element_le::<F>(&element.to_le_bytes()).unwrap();
+
+    let mut total = F::one();
+
+    for i in 0..domain_size {
+        if i == element {
+            continue;
+        }
+
+        let i_fr = read_field_element_le::<F>(&i.to_le_bytes()).unwrap();
+
+        let mut tmp = domain_element_fr;
+        tmp.sub_assign(&i_fr);
+        total.mul_assign(&tmp);
+    }
+
+    total
+}
+
+/// Return (|a - b|, a < b).
 fn sub_abs<N: std::ops::Sub<Output = N> + std::cmp::PartialOrd>(a: N, b: N) -> (N, bool) {
     if a < b {
         (b - a, true)
@@ -194,11 +198,16 @@ fn sub_abs<N: std::ops::Sub<Output = N> + std::cmp::PartialOrd>(a: N, b: N) -> (
     }
 }
 
+/// `srs` is a structured reference string.
+///
+/// `q` is a point on the elliptic curve `G`.
+///
+/// `precomputed_weights` is a instance of `PrecomputedWeights`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaConfig<G: CurveProjective> {
-    pub srs: Vec<G::Affine>,
-    pub q: G::Affine,
-    pub precomputed_weights: PrecomputedWeights<G::Scalar>,
+    srs: Vec<G::Affine>,
+    q: G::Affine,
+    precomputed_weights: PrecomputedWeights<G::Scalar>,
 }
 
 impl<G: CurveProjective> IpaConfig<G>
@@ -206,12 +215,17 @@ where
     <G::Affine as CurveAffine>::Base: PrimeField,
 {
     pub fn new(domain_size: usize) -> Self {
+        #[cfg(debug_assertions)]
         let start = std::time::Instant::now();
+
         let srs = generate_random_points::<G>(domain_size).unwrap();
+
+        #[cfg(debug_assertions)]
         println!(
             "generate srs: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
         );
+
         let q = <G::Affine as CurveAffine>::one();
         let precomputed_weights = PrecomputedWeights::new(domain_size);
 
@@ -221,6 +235,32 @@ where
             precomputed_weights,
         }
     }
+
+    pub fn get_srs(&self) -> &Vec<G::Affine> {
+        &self.srs
+    }
+
+    pub fn get_q(&self) -> G::Affine {
+        self.q
+    }
+
+    pub fn get_precomputed_weights(&self) -> &PrecomputedWeights<G::Scalar> {
+        &self.precomputed_weights
+    }
+
+    pub fn get_domain_size(&self) -> usize {
+        self.precomputed_weights.get_domain_size()
+    }
+}
+
+#[test]
+fn test_ensure_length_of_srs_is_valid() {
+    use franklin_crypto::bellman::bn256::G1;
+
+    let domain_size = 256;
+    let ipa_conf = IpaConfig::<G1>::new(domain_size);
+
+    assert_eq!(ipa_conf.get_srs().len(), domain_size);
 }
 
 pub trait Committer<GA: CurveAffine> {

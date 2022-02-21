@@ -101,8 +101,6 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
     ) -> anyhow::Result<MultiProof<G1>> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
-        // transcript.DomainSep("multiproof");
-
         if commitments.len() != fs.len() {
             anyhow::anyhow!(
                 "number of commitments = {}, while number of functions = {}",
@@ -123,7 +121,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             anyhow::anyhow!("cannot create a batch proof with no data");
         }
 
-        let domain_size = 2usize.pow(ipa_conf.precomputed_weights.num_ipa_rounds);
+        let domain_size = ipa_conf.get_domain_size();
         for i in 0..num_queries {
             transcript.commit_point(&commitments[i])?; // C
 
@@ -136,19 +134,21 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             transcript.commit_bytes(&zs[i].to_le_bytes())?;
 
             // get the `y` value
-
             let f_i = fs[i].clone();
             let y_i = f_i[zs[i]];
             transcript.commit_field_element(&y_i)?; // y
         }
         let r = transcript.get_challenge(); // r
-                                            // println!("r: {:?}", r);
+
+        // println!("r: {:?}", r);
 
         // Compute g(X)
         let mut g_x = vec![Fr::zero(); domain_size];
         let mut powers_of_r = Fr::one(); // powers_of_r = 1
         for i in 0..num_queries {
-            let quotient = ipa_conf.precomputed_weights.divide_on_domain(zs[i], &fs[i]); // quotient[j] = (f_i(j) - f_i(zs[i])) / (j - zs[i])
+            let quotient = ipa_conf
+                .get_precomputed_weights()
+                .divide_on_domain(zs[i], &fs[i]); // quotient[j] = (f_i(j) - f_i(zs[i])) / (j - zs[i])
 
             for j in 0..domain_size {
                 let mut tmp = quotient[j];
@@ -164,7 +164,8 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         transcript.commit_point(&d)?; // D
 
         let t = transcript.get_challenge(); // t
-                                            // println!("t: {:?}", t);
+
+        // println!("t: {:?}", t);
 
         // Compute h(X) = g_1(X)
         let mut h_x = vec![Fr::zero(); domain_size];
@@ -209,7 +210,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
 
         let transcript_params = transcript.get_challenge();
 
-        let ipa_proof = Bn256Ipa::create_proof(
+        let (ipa_proof, _) = Bn256Ipa::create_proof(
             e_minus_d.into_affine(),
             &h_minus_g,
             t,
@@ -250,8 +251,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             anyhow::anyhow!("cannot create a batch proof with no data");
         }
 
-        println!("update transcript");
-        let domain_size = 2usize.pow(ipa_conf.precomputed_weights.num_ipa_rounds);
+        let domain_size = ipa_conf.get_domain_size();
         for i in 0..num_queries {
             assert!(zs[i] < domain_size);
             let start = std::time::Instant::now();
@@ -288,9 +288,6 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         let t = transcript.get_challenge();
         // println!("t: {:?}", t);
 
-        // Compute helper_scalars. This is r^i / t - z_i
-        // There are more optimal ways to do this, but
-        // this is more readable, so will leave for now
         let mut helper_scalars: Vec<Fr> = Vec::with_capacity(num_queries);
         let mut powers_of_r = Fr::one(); // powers_of_r = 1
         for z_i in zs.iter() {
@@ -307,7 +304,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             powers_of_r.mul_assign(&r); // powers_of_r *= r
         }
 
-        // Compute g_2(t) = SUM y_i * (r^i / t - z_i) = SUM y_i * helper_scalars
+        // Compute g_2(t) = \sum_{i = 0}^{num_queries - 1} y_i * (r^i / t - z_i).
         let mut g_2_t = Fr::zero();
         for i in 0..num_queries {
             let mut tmp = ys[i];
@@ -315,7 +312,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             g_2_t.add_assign(&tmp); // g_2_t += ys[i] * helper_scalars[i]
         }
 
-        // Compute E = \sum_{i = 0}^{num_queries - 1} C_i * (r^i / t - z_i)
+        // Compute E = \sum_{i = 0}^{num_queries - 1} C_i * (r^i / t - z_i).
         let mut e = G1::zero();
         for (i, c_i) in commitments.iter().enumerate() {
             let tmp = c_i.mul(helper_scalars[i]); // tmp = c_i * helper_scalars_i

@@ -106,7 +106,7 @@ mod tests {
 impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     fn create_proof(
         commitment: Point<Bn256, Unknown>,
-        a: &[Fs],
+        lagrange_poly: &[Fs],
         eval_point: Fs,
         transcript_params: Fs,
         ipa_conf: &IpaConfig<Bn256>,
@@ -114,10 +114,10 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
     ) -> anyhow::Result<IpaProof<Bn256>> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf.srs.clone();
-        // let _commitment = commit(&current_basis.clone(), a, jubjub_params)?;
+        // let _commitment = commit(&current_basis.clone(), lagrange_poly, jubjub_params)?;
         // assert!(commitment.eq(&_commitment));
 
-        let mut a = a.to_vec();
+        let mut lagrange_poly = lagrange_poly.to_vec();
         let start = std::time::Instant::now();
         let mut b = ipa_conf
             .precomputed_weights
@@ -130,7 +130,7 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }
 
-        let ip = inner_prod(&a, &b)?;
+        let ip = inner_prod(&lagrange_poly, &b)?;
 
         let start = std::time::Instant::now();
         transcript.commit_point(&commitment)?; // C
@@ -153,7 +153,9 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
         for _ in 0..num_rounds {
             let lap_start = std::time::Instant::now();
 
-            let a_lr = a.chunks(a.len() / 2).collect::<Vec<_>>();
+            let a_lr = lagrange_poly
+                .chunks(lagrange_poly.len() / 2)
+                .collect::<Vec<_>>();
             let a_l = a_lr[0];
             let a_r = a_lr[1];
             let b_lr = b.chunks(b.len() / 2).collect::<Vec<_>>();
@@ -196,7 +198,7 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
                 .inverse()
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
 
-            a = fold_scalars(a_l, a_r, &x)?;
+            lagrange_poly = fold_scalars(a_l, a_r, &x)?;
             b = fold_scalars(b_l, b_r, &x_inv)?;
             current_basis = fold_points(g_l, g_r, &x_inv, jubjub_params)?;
 
@@ -206,14 +208,16 @@ impl Ipa<Bn256, PoseidonBn256Transcript> for Bn256Ipa {
             );
         }
 
-        if a.len() != 1 {
-            anyhow::bail!("`a`, `b` and `current_basis` should be 1 at the end of the reduction");
+        if lagrange_poly.len() != 1 {
+            anyhow::bail!(
+                "`lagrange_poly`, `b` and `current_basis` should be 1 at the end of the reduction"
+            );
         }
 
         Ok(IpaProof {
             l: ls,
             r: rs,
-            a: a[0],
+            a: lagrange_poly[0],
         })
     }
 

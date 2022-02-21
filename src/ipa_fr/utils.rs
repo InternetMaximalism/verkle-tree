@@ -109,20 +109,6 @@ fn test_read_write_ff() {
     assert_eq!(recovered_bytes, bytes);
 }
 
-// pub fn fr_to_fs_repr<E: JubjubEngine>(
-//   value: &E::Fr,
-// ) -> anyhow::Result<<E::Fs as PrimeField>::Repr> {
-//   let bytes = write_field_element_le(value);
-//   let mut fs_repr = <E::Fs as PrimeField>::Repr::default();
-//   fs_repr.read_le::<&[u8]>(bytes.as_ref())?;
-
-//   Ok(fs_repr)
-// }
-
-// pub fn fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs> {
-//   read_field_element_le(&write_field_element_le(value))
-// }
-
 pub fn generate_random_points<G: CurveProjective>(
     num_points: usize,
 ) -> anyhow::Result<Vec<G::Affine>>
@@ -168,30 +154,8 @@ where
     Ok(points)
 }
 
-// pub fn is_in_prime_subgroup<E: JubjubEngine>(
-//   p: &Point<E, Unknown>,
-//   jubjub_params: &E::Params,
-// ) -> bool {
-//   let order = jubjub_params.order();
-
-//   let mut res_proj = Point::<E, Unknown>::zero(); // identity
-
-//   let bit_len = order.bit_len();
-
-//   for i in 0..(bit_len + 1) {
-//     res_proj = res_proj.double(jubjub_params);
-//     if order.bit(bit_len - i) == 1 {
-//       res_proj = res_proj.add(p, jubjub_params);
-//     }
-//   }
-
-//   let identity = Point::<E, Unknown>::zero(); // identity
-
-//   identity.eq(&res_proj)
-// }
-
-// Computes vector c satisfying c[i] = a[i] + b[i] * x.
-// Error if vectors a, b have different lengths.
+/// Computes vector c satisfying `c[i] = a[i] + b[i] * x`.
+/// Errors will occur if vectors `a`, `b` have different lengths.
 pub fn fold_scalars<F: PrimeField>(a: &[F], b: &[F], x: &F) -> anyhow::Result<Vec<F>> {
     if a.len() != b.len() {
         anyhow::bail!(
@@ -210,8 +174,8 @@ pub fn fold_scalars<F: PrimeField>(a: &[F], b: &[F], x: &F) -> anyhow::Result<Ve
     Ok(result)
 }
 
-// Computes vector c satisfying c[i] = a[i] + b[i] * x.
-// Error if vectors a, b have different lengths.
+/// Computes vector c satisfying `c[i] = a[i] + b[i] * x`.
+/// Errors will occur if vectors `a`, `b` have different lengths.
 pub fn fold_points<G>(a: &[G], b: &[G], x: G::Scalar) -> anyhow::Result<Vec<G>>
 where
     G: CurveProjective,
@@ -233,8 +197,8 @@ where
     Ok(result)
 }
 
-// Computes the inner product of vectors a and b.
-// Error if the two vectors have different lengths.
+/// Computes the inner product of vectors `a` and `b`.
+/// Errors will occur if the two vectors have different lengths.
 pub fn inner_prod<F: PrimeField>(a: &[F], b: &[F]) -> anyhow::Result<F> {
     if a.len() != b.len() {
         anyhow::bail!(
@@ -254,8 +218,8 @@ pub fn inner_prod<F: PrimeField>(a: &[F], b: &[F]) -> anyhow::Result<F> {
     Ok(result)
 }
 
-// Computes the inner product of vectors a and b.
-// Error if the two vectors have different lengths.
+/// Multiply `points[i]` by `scalars[i]` for each `i`, and sums up these values.
+/// Errors will occur if the two vectors have different lengths.
 pub fn multi_scalar<G>(points: &[G], scalars: &[G::Scalar]) -> anyhow::Result<G>
 where
     G: CurveProjective,
@@ -278,8 +242,9 @@ where
     Ok(result)
 }
 
-// Commits to a polynomial using the input group elements.
-// Error if the number of group elements does not equal the number of polynomial coefficients.
+/// Commits to a polynomial using the input group elements.
+/// Errors will occur if the number of group elements does not equal the number of polynomial
+/// coefficients.
 pub fn commit<G>(group_elements: &[G], polynomial: &[G::Scalar]) -> anyhow::Result<G>
 where
     G: CurveProjective,
@@ -302,9 +267,6 @@ pub fn test_poly<F: PrimeField>(polynomial: &[u64], domain_size: usize) -> Vec<F
         polynomial_fr.push(read_field_element_le(&polynomial_i.to_le_bytes()).unwrap());
     }
 
-    // for _ in n..DOMAIN_SIZE {
-    //     polynomial_fr.push(F::zero());
-    // }
     polynomial_fr.resize(domain_size, F::zero());
 
     polynomial_fr
