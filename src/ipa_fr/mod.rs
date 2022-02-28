@@ -4,7 +4,7 @@ pub mod rns;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine, G1};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
 use crate::ipa_fr::config::Committer;
@@ -18,7 +18,7 @@ use self::utils::{commit, fold_points, fold_scalars, inner_prod};
 
 #[cfg(test)]
 mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
+    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine};
 
     use crate::ipa_fr::proof::IpaProof;
     use crate::ipa_fr::rns::BaseRnsParameters;
@@ -36,7 +36,7 @@ mod tests {
         let poly = vec![12, 97];
         // let poly = vec![12, 97, 37, 0, 1, 208, 132, 3];
         let domain_size = poly.len();
-        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let ipa_conf = &IpaConfig::<G1Affine>::new(domain_size);
         let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
 
         let padded_poly = test_poly::<Fr>(&poly, domain_size);
@@ -44,7 +44,7 @@ mod tests {
 
         let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
 
-        let (proof, inner_product) = IpaProof::<G1>::create(
+        let (proof, inner_product) = IpaProof::<G1Affine>::create(
             prover_commitment,
             &padded_poly,
             point,
@@ -85,7 +85,7 @@ mod tests {
 /// `eval_point` and `inner_prod` are elements in `G::Scalar`.
 ///
 /// `transcript_params` is a initialization parameter of the transcript `T`.
-impl IpaProof<G1> {
+impl IpaProof<G1Affine> {
     /// Create a proof which shows `inner_prod = f(eval_point)`.
     pub fn create(
         commitment: G1Affine,
@@ -93,7 +93,7 @@ impl IpaProof<G1> {
         eval_point: Fr,
         transcript_params: Fr,
         rns_params: &BaseRnsParameters<Bn256>,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<(Self, Fr)> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf
@@ -218,7 +218,7 @@ impl IpaProof<G1> {
         ip: Fr, // inner_prod
         transcript_params: Fr,
         rns_params: &BaseRnsParameters<Bn256>,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<bool> {
         let proof = self;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);

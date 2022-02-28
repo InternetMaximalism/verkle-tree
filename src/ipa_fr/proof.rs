@@ -1,19 +1,19 @@
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
-use franklin_crypto::bellman::CurveProjective;
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine};
+use franklin_crypto::bellman::CurveAffine;
 use serde::{Deserialize, Serialize};
 
 use super::rns::BaseRnsParameters;
 use super::transcript::Bn256Transcript;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpaProof<G: CurveProjective> {
-    pub l: Vec<G::Affine>,
-    pub r: Vec<G::Affine>,
-    pub a: G::Scalar,
+pub struct IpaProof<GA: CurveAffine> {
+    pub l: Vec<GA>,
+    pub r: Vec<GA>,
+    pub a: GA::Scalar,
 }
 
 pub fn generate_challenges<T: Bn256Transcript>(
-    ipa_proof: &IpaProof<G1>,
+    ipa_proof: &IpaProof<G1Affine>,
     rns_params: &BaseRnsParameters<Bn256>,
     transcript: &mut T,
 ) -> anyhow::Result<Vec<Fr>> {

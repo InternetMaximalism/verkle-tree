@@ -204,21 +204,21 @@ fn sub_abs<N: std::ops::Sub<Output = N> + std::cmp::PartialOrd>(a: N, b: N) -> (
 ///
 /// `precomputed_weights` is a instance of `PrecomputedWeights`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpaConfig<G: CurveProjective> {
-    srs: Vec<G::Affine>,
-    q: G::Affine,
-    precomputed_weights: PrecomputedWeights<G::Scalar>,
+pub struct IpaConfig<GA: CurveAffine> {
+    srs: Vec<GA>,
+    q: GA,
+    precomputed_weights: PrecomputedWeights<GA::Scalar>,
 }
 
-impl<G: CurveProjective> IpaConfig<G>
+impl<GA: CurveAffine> IpaConfig<GA>
 where
-    <G::Affine as CurveAffine>::Base: PrimeField,
+    GA::Base: PrimeField,
 {
     pub fn new(domain_size: usize) -> Self {
         #[cfg(debug_assertions)]
         let start = std::time::Instant::now();
 
-        let srs = generate_random_points::<G>(domain_size).unwrap();
+        let srs = generate_random_points::<GA::Projective>(domain_size).unwrap();
 
         #[cfg(debug_assertions)]
         println!(
@@ -226,7 +226,7 @@ where
             start.elapsed().as_micros() as f64 / 1000000.0
         );
 
-        let q = <G::Affine as CurveAffine>::one();
+        let q = GA::one();
         let precomputed_weights = PrecomputedWeights::new(domain_size);
 
         Self {
@@ -236,15 +236,15 @@ where
         }
     }
 
-    pub fn get_srs(&self) -> &Vec<G::Affine> {
+    pub fn get_srs(&self) -> &Vec<GA> {
         &self.srs
     }
 
-    pub fn get_q(&self) -> G::Affine {
+    pub fn get_q(&self) -> GA {
         self.q
     }
 
-    pub fn get_precomputed_weights(&self) -> &PrecomputedWeights<G::Scalar> {
+    pub fn get_precomputed_weights(&self) -> &PrecomputedWeights<GA::Scalar> {
         &self.precomputed_weights
     }
 
@@ -255,10 +255,10 @@ where
 
 #[test]
 fn test_ensure_length_of_srs_is_valid() {
-    use franklin_crypto::bellman::bn256::G1;
+    use franklin_crypto::bellman::bn256::G1Affine;
 
     let domain_size = 256;
-    let ipa_conf = IpaConfig::<G1>::new(domain_size);
+    let ipa_conf = IpaConfig::<G1Affine>::new(domain_size);
 
     assert_eq!(ipa_conf.get_srs().len(), domain_size);
 }
@@ -269,14 +269,11 @@ pub trait Committer<GA: CurveAffine> {
     fn commit(&self, polynomial: &[GA::Scalar]) -> Result<GA, Self::Err>;
 }
 
-impl<G: CurveProjective> Committer<G::Affine> for IpaConfig<G> {
+impl<GA: CurveAffine> Committer<GA> for IpaConfig<GA> {
     type Err = anyhow::Error;
 
-    fn commit(
-        &self,
-        polynomial: &[<G::Affine as CurveAffine>::Scalar],
-    ) -> anyhow::Result<G::Affine> {
-        let result = commit::<G>(
+    fn commit(&self, polynomial: &[GA::Scalar]) -> anyhow::Result<GA> {
+        let result = commit::<GA::Projective>(
             &self
                 .srs
                 .iter()

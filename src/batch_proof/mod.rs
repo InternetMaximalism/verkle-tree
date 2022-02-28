@@ -8,14 +8,14 @@ use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa_fr::utils::read_field_element_le;
 
 #[derive(Clone, Debug)]
-pub struct BatchProof<G: CurveProjective> {
-    pub ipa: IpaProof<G>,
-    pub d: G::Affine,
+pub struct BatchProof<GA: CurveAffine> {
+    pub ipa: IpaProof<GA>,
+    pub d: GA,
 }
 
 #[cfg(test)]
 mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
+    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine};
 
     use super::BatchProof;
     use crate::ipa_fr::config::Committer;
@@ -28,7 +28,7 @@ mod tests {
         // Shared View
         println!("create ipa_conf");
         let domain_size = 256;
-        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let ipa_conf = &IpaConfig::<G1Affine>::new(domain_size);
         let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
 
         // Prover view
@@ -45,7 +45,7 @@ mod tests {
             let y_i = fs[i][zs[i]];
             ys.push(y_i);
         }
-        let proof = BatchProof::<G1>::create(
+        let proof = BatchProof::<G1Affine>::create(
             &commitments,
             &fs,
             &zs,
@@ -73,14 +73,14 @@ mod tests {
     }
 }
 
-impl BatchProof<G1> {
+impl BatchProof<G1Affine> {
     pub fn create(
         commitments: &[G1Affine],
         fs: &[Vec<Fr>],
         zs: &[usize],
         transcript_params: Fr,
         rns_params: &BaseRnsParameters<Bn256>,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<Self> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
@@ -193,7 +193,7 @@ impl BatchProof<G1> {
 
         let transcript_params = transcript.get_challenge();
 
-        let (ipa_proof, _) = IpaProof::<G1>::create(
+        let (ipa_proof, _) = IpaProof::<G1Affine>::create(
             e_minus_d.into_affine(),
             &h_minus_g,
             t,
@@ -212,7 +212,7 @@ impl BatchProof<G1> {
         zs: &[usize],
         transcript_params: Fr,
         rns_params: &BaseRnsParameters<Bn256>,
-        ipa_conf: &IpaConfig<G1>,
+        ipa_conf: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<bool> {
         let proof = self;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);

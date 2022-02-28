@@ -930,17 +930,21 @@ where
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct VerkleTree<GA>
+pub struct VerkleTree<K, GA>
 where
+    K: AbstractKey<Path = Vec<usize>>,
+    K::Stem: AbstractStem<Path = Vec<usize>> + IntoFieldElement<GA::Scalar>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub root: VerkleNode<[u8; 32], [u8; 32], GA>,
-    pub(crate) committer: IpaConfig<GA::Projective>,
+    pub root: VerkleNode<K, [u8; 32], GA>,
+    pub(crate) committer: IpaConfig<GA>,
 }
 
-impl<GA> Default for VerkleTree<GA>
+impl<K, GA> Default for VerkleTree<K, GA>
 where
+    K: AbstractKey<Path = Vec<usize>>,
+    K::Stem: AbstractStem<Path = Vec<usize>> + IntoFieldElement<GA::Scalar>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -952,20 +956,22 @@ where
     }
 }
 
-impl<GA> VerkleTree<GA>
+impl<K, GA> VerkleTree<K, GA>
 where
+    K: AbstractKey<Path = Vec<usize>>,
+    K::Stem: AbstractStem<Path = Vec<usize>> + IntoFieldElement<GA::Scalar>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn insert(&mut self, key: [u8; 32], value: [u8; 32]) -> Option<[u8; 32]> {
+    pub fn insert(&mut self, key: K, value: [u8; 32]) -> Option<[u8; 32]> {
         self.root.insert(key.to_path(), key, value)
     }
 
-    pub fn remove(&mut self, key: &[u8; 32]) -> Option<[u8; 32]> {
+    pub fn remove(&mut self, key: &K) -> Option<[u8; 32]> {
         self.root.remove(key.to_path(), key)
     }
 
-    pub fn get(&self, key: &[u8; 32]) -> Option<&[u8; 32]> {
+    pub fn get(&self, key: &K) -> Option<&[u8; 32]> {
         self.root.get(key.to_path(), key)
     }
 }
@@ -984,8 +990,10 @@ where
 //     fn get_commitments_along_path(&self, keys: &[K]) -> Result<Self::ProofCommitments, Self::Err>;
 // }
 
-impl<GA> VerkleTree<GA>
+impl<K, GA> VerkleTree<K, GA>
 where
+    K: AbstractKey<Path = Vec<usize>>,
+    K::Stem: AbstractStem<Path = Vec<usize>> + IntoFieldElement<GA::Scalar>,
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
@@ -995,8 +1003,8 @@ where
 
     pub fn get_commitments_along_path(
         &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<MultiProofCommitments<[u8; 32], GA>> {
+        keys: &[K],
+    ) -> anyhow::Result<MultiProofCommitments<K, GA>> {
         self.root.get_commitments_along_path(keys)
     }
 }
