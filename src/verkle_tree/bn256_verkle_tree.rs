@@ -1,9 +1,11 @@
+use franklin_crypto::bellman::bn256::Bn256;
 use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
 use franklin_crypto::bellman::CurveProjective;
 // use franklin_crypto::bellman::Field;
 
-use crate::batch_proof::{BatchProof, Bn256BatchProof, MultiProof};
+use crate::batch_proof::BatchProof;
 use crate::ipa_fr::config::IpaConfig;
+use crate::ipa_fr::rns::BaseRnsParameters;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 
 use super::proof::{CommitmentElements, Elements, ExtraProofData, MultiProofCommitments};
@@ -11,7 +13,7 @@ use super::trie::VerkleTree;
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<G: CurveProjective> {
-    pub multi_proof: MultiProof<G>,  // multi-point argument
+    pub multi_proof: BatchProof<G>,  // multi-point argument
     pub commitments: Vec<G::Affine>, // commitments, sorted by their path in the tree
     pub extra_data_list: Vec<ExtraProofData<[u8; 32]>>,
     pub keys: Vec<[u8; 32]>,
@@ -24,6 +26,7 @@ impl VerkleProof<G1> {
         keys: &[[u8; 32]],
     ) -> anyhow::Result<(Self, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
+        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
         tree.compute_commitment()?;
 
         let MultiProofCommitments {
@@ -44,11 +47,12 @@ impl VerkleProof<G1> {
             values.push(*val);
         }
 
-        let multi_proof = Bn256BatchProof::create_proof(
+        let multi_proof = BatchProof::<G1>::create(
             &commitments,
             &elements.fs,
             &elements.zs,
             transcript.into_params(),
+            rns_params,
             &tree.committer,
         )?;
         let proof = VerkleProof {
@@ -64,12 +68,13 @@ impl VerkleProof<G1> {
 
     pub fn check(&self, zs: &[usize], ys: &[Fr], ipa_conf: &IpaConfig<G1>) -> anyhow::Result<bool> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        Bn256BatchProof::check_proof(
-            self.multi_proof.clone(),
+        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
+        self.multi_proof.check(
             &self.commitments.clone(),
             ys,
             zs,
             transcript.into_params(),
+            rns_params,
             ipa_conf,
         )
     }

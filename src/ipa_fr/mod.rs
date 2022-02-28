@@ -4,15 +4,75 @@ pub mod rns;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
+use crate::ipa_fr::config::Committer;
 use crate::ipa_fr::utils::log2_ceil;
 
 use self::config::IpaConfig;
 use self::proof::{generate_challenges, IpaProof};
+use self::rns::BaseRnsParameters;
 use self::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use self::utils::{commit, fold_points, fold_scalars, inner_prod};
+
+#[cfg(test)]
+mod tests {
+    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
+
+    use crate::ipa_fr::proof::IpaProof;
+    use crate::ipa_fr::rns::BaseRnsParameters;
+
+    use super::config::{Committer, IpaConfig};
+    use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
+    use super::utils::{read_field_element_le, test_poly};
+
+    #[test]
+    fn test_ipa_fr_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
+        let point: Fr = read_field_element_le(&123456789u64.to_le_bytes()).unwrap();
+
+        // Prover view
+
+        let poly = vec![12, 97];
+        // let poly = vec![12, 97, 37, 0, 1, 208, 132, 3];
+        let domain_size = poly.len();
+        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
+
+        let padded_poly = test_poly::<Fr>(&poly, domain_size);
+        let prover_commitment = ipa_conf.commit(&padded_poly).unwrap();
+
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
+
+        let (proof, inner_product) = IpaProof::<G1>::create(
+            prover_commitment,
+            &padded_poly,
+            point,
+            prover_transcript.into_params(),
+            rns_params,
+            ipa_conf,
+        )?;
+
+        // Verifier view
+
+        let verifier_commitment = prover_commitment; // In reality, the verifier will rebuild this themselves.
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
+
+        let success = proof
+            .check(
+                verifier_commitment,
+                point,
+                inner_product,
+                verifier_transcript.into_params(),
+                rns_params,
+                ipa_conf,
+            )
+            .unwrap();
+        assert!(success, "inner product proof failed");
+
+        Ok(())
+    }
+}
 
 /// Create a proof which shows `inner_prod = f(eval_point)` and verify it.
 /// Here, f(z) is a `G::Scalar`-polynomial of degree at most `domain_size - 1`,
@@ -25,103 +85,25 @@ use self::utils::{commit, fold_points, fold_scalars, inner_prod};
 /// `eval_point` and `inner_prod` are elements in `G::Scalar`.
 ///
 /// `transcript_params` is a initialization parameter of the transcript `T`.
-pub trait Ipa<G: CurveProjective, T: Bn256Transcript> {
+impl IpaProof<G1> {
     /// Create a proof which shows `inner_prod = f(eval_point)`.
-    fn create_proof(
-        commitment: G::Affine,
-        lagrange_poly: &[<G as CurveProjective>::Scalar],
-        eval_point: <G as CurveProjective>::Scalar,
-        transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<(IpaProof<G>, G::Scalar)>;
-
-    /// Verify given `proof`.
-    fn check_proof(
-        commitment: G::Affine,
-        proof: IpaProof<G>,
-        eval_point: <G as CurveProjective>::Scalar,
-        inner_prod: <G as CurveProjective>::Scalar,
-        transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<bool>;
-}
-
-pub struct Bn256Ipa;
-
-#[cfg(test)]
-mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
-
-    use super::config::{Committer, IpaConfig};
-    use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-    use super::utils::{inner_prod, read_field_element_le, test_poly};
-    use super::{Bn256Ipa, Ipa};
-
-    #[test]
-    fn test_ipa_fr_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
-        let point: Fr = read_field_element_le(&123456789u64.to_le_bytes()).unwrap();
-
-        // Prover view
-
-        let poly = vec![12, 97];
-        // let poly = vec![12, 97, 37, 0, 1, 208, 132, 3];
-        let domain_size = poly.len();
-        let ipa_conf = &IpaConfig::<G1>::new(domain_size);
-
-        let padded_poly = test_poly::<Fr>(&poly, domain_size);
-        let prover_commitment = ipa_conf.commit(&padded_poly).unwrap();
-
-        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
-
-        let (proof, inner_product) = Bn256Ipa::create_proof(
-            prover_commitment,
-            &padded_poly,
-            point,
-            prover_transcript.into_params(),
-            ipa_conf,
-        )?;
-
-        // let lagrange_coeffs = ipa_conf
-        //     .precomputed_weights
-        //     .compute_barycentric_coefficients(&point)?;
-        // let inner_product = inner_prod(&padded_poly, &lagrange_coeffs)?;
-
-        // Verifier view
-
-        let verifier_commitment = prover_commitment; // In reality, the verifier will rebuild this themselves.
-        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
-
-        let success = Bn256Ipa::check_proof(
-            verifier_commitment,
-            proof,
-            point,
-            inner_product,
-            verifier_transcript.into_params(),
-            ipa_conf,
-        )
-        .unwrap();
-        assert!(success, "inner product proof failed");
-
-        Ok(())
-    }
-}
-
-impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
-    fn create_proof(
+    pub fn create(
         commitment: G1Affine,
         lagrange_poly: &[Fr],
         eval_point: Fr,
         transcript_params: Fr,
+        rns_params: &BaseRnsParameters<Bn256>,
         ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<(IpaProof<G1>, Fr)> {
+    ) -> anyhow::Result<(Self, Fr)> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf
             .get_srs()
             .iter()
             .map(|x| x.into_projective())
             .collect::<Vec<_>>();
-        // let _commitment = commit(&current_basis.clone(), lagrange_poly, jubjub_params)?;
-        // debug_assert!(commitment.eq(&_commitment));
+        if cfg!(debug_assertions) {
+            assert!(commitment.eq(&ipa_conf.commit(&lagrange_poly).unwrap()));
+        }
 
         let mut a = lagrange_poly.to_vec();
         let start = std::time::Instant::now();
@@ -139,7 +121,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         let ip = inner_prod(&a, &b)?;
 
         let start = std::time::Instant::now();
-        transcript.commit_point(&commitment)?; // C
+        transcript.commit_point(&commitment, &rns_params)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
@@ -191,8 +173,8 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             rs.push(c_r);
 
             let start = std::time::Instant::now();
-            transcript.commit_point(&c_l)?; // L
-            transcript.commit_point(&c_r)?; // R
+            transcript.commit_point(&c_l, &rns_params)?; // L
+            transcript.commit_point(&c_r, &rns_params)?; // R
             println!(
                 "update transcript: {} s",
                 start.elapsed().as_micros() as f64 / 1000000.0
@@ -228,14 +210,17 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         ))
     }
 
-    fn check_proof(
+    /// Verify given `proof`.
+    pub fn check(
+        &self,
         commitment: G1Affine,
-        proof: IpaProof<G1>,
         eval_point: Fr,
         ip: Fr, // inner_prod
         transcript_params: Fr,
+        rns_params: &BaseRnsParameters<Bn256>,
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<bool> {
+        let proof = self;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         // println!("{:?}", proof);
@@ -259,7 +244,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }
 
-        transcript.commit_point(&commitment)?; // C
+        transcript.commit_point(&commitment, &rns_params)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
 
@@ -273,7 +258,7 @@ impl Ipa<G1, PoseidonBn256Transcript> for Bn256Ipa {
         let mut result_c = commitment.into_projective();
         result_c.add_assign(&qy);
 
-        let challenges = generate_challenges(&proof, &mut transcript).unwrap();
+        let challenges = generate_challenges(&proof, rns_params, &mut transcript).unwrap();
 
         let mut challenges_inv: Vec<Fr> = Vec::with_capacity(challenges.len());
 

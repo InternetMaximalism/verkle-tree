@@ -1,45 +1,25 @@
-use franklin_crypto::bellman::pairing::bn256::{Fr, G1Affine, G1};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine, G1};
 use franklin_crypto::bellman::{CurveAffine, CurveProjective, Field};
 
 use crate::ipa_fr::config::{Committer, IpaConfig};
 use crate::ipa_fr::proof::IpaProof;
+use crate::ipa_fr::rns::BaseRnsParameters;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa_fr::utils::read_field_element_le;
-use crate::ipa_fr::{Bn256Ipa, Ipa};
 
 #[derive(Clone, Debug)]
-pub struct MultiProof<G: CurveProjective> {
+pub struct BatchProof<G: CurveProjective> {
     pub ipa: IpaProof<G>,
     pub d: G::Affine,
 }
 
-pub trait BatchProof<G: CurveProjective, T: Bn256Transcript> {
-    fn create_proof(
-        commitments: &[G::Affine],
-        fs: &[Vec<G::Scalar>],
-        zs: &[usize],
-        transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<MultiProof<G>>;
-
-    fn check_proof(
-        proof: MultiProof<G>,
-        commitments: &[G::Affine],
-        ys: &[G::Scalar],
-        zs: &[usize],
-        transcript_params: T::Params,
-        ipa_conf: &IpaConfig<G>,
-    ) -> anyhow::Result<bool>;
-}
-
-pub struct Bn256BatchProof;
-
 #[cfg(test)]
 mod tests {
-    use franklin_crypto::bellman::pairing::bn256::{Fr, G1};
+    use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1};
 
-    use super::{BatchProof, Bn256BatchProof};
+    use super::BatchProof;
     use crate::ipa_fr::config::Committer;
+    use crate::ipa_fr::rns::BaseRnsParameters;
     use crate::ipa_fr::transcript::Bn256Transcript;
     use crate::ipa_fr::{config::IpaConfig, transcript::PoseidonBn256Transcript, utils::test_poly};
 
@@ -49,6 +29,7 @@ mod tests {
         println!("create ipa_conf");
         let domain_size = 256;
         let ipa_conf = &IpaConfig::<G1>::new(domain_size);
+        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
 
         // Prover view
         let poly_1 = test_poly::<Fr>(&[12, 97, 37, 0, 1, 208, 132, 3], domain_size);
@@ -64,11 +45,12 @@ mod tests {
             let y_i = fs[i][zs[i]];
             ys.push(y_i);
         }
-        let proof = Bn256BatchProof::create_proof(
+        let proof = BatchProof::<G1>::create(
             &commitments,
             &fs,
             &zs,
             prover_transcript.into_params(),
+            rns_params,
             ipa_conf,
         )?;
 
@@ -76,12 +58,12 @@ mod tests {
 
         // Verifier view
         let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        let success = Bn256BatchProof::check_proof(
-            proof,
+        let success = proof.check(
             &commitments,
             &ys,
             &zs,
             verifier_transcript.into_params(),
+            rns_params,
             ipa_conf,
         )?;
 
@@ -91,14 +73,15 @@ mod tests {
     }
 }
 
-impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
-    fn create_proof(
+impl BatchProof<G1> {
+    pub fn create(
         commitments: &[G1Affine],
         fs: &[Vec<Fr>],
         zs: &[usize],
         transcript_params: Fr,
+        rns_params: &BaseRnsParameters<Bn256>,
         ipa_conf: &IpaConfig<G1>,
-    ) -> anyhow::Result<MultiProof<G1>> {
+    ) -> anyhow::Result<Self> {
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         if commitments.len() != fs.len() {
@@ -123,7 +106,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
 
         let domain_size = ipa_conf.get_domain_size();
         for i in 0..num_queries {
-            transcript.commit_point(&commitments[i])?; // C
+            transcript.commit_point(&commitments[i], &rns_params)?; // C
 
             assert!(
                 zs[i] < domain_size,
@@ -161,7 +144,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
 
         let d = ipa_conf.commit(&g_x)?;
 
-        transcript.commit_point(&d)?; // D
+        transcript.commit_point(&d, &rns_params)?; // D
 
         let t = transcript.get_challenge(); // t
 
@@ -200,7 +183,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             "commit h_x: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
         );
-        transcript.commit_point(&e)?; // E
+        transcript.commit_point(&e, &rns_params)?; // E
 
         let mut minus_d = G1::zero();
         minus_d.sub_assign(&d.into_projective());
@@ -210,25 +193,28 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
 
         let transcript_params = transcript.get_challenge();
 
-        let (ipa_proof, _) = Bn256Ipa::create_proof(
+        let (ipa_proof, _) = IpaProof::<G1>::create(
             e_minus_d.into_affine(),
             &h_minus_g,
             t,
             transcript_params,
+            rns_params,
             ipa_conf,
         )?;
 
-        Ok(MultiProof { ipa: ipa_proof, d })
+        Ok(BatchProof { ipa: ipa_proof, d })
     }
 
-    fn check_proof(
-        proof: MultiProof<G1>,
+    pub fn check(
+        &self,
         commitments: &[G1Affine],
         ys: &[Fr],
         zs: &[usize],
         transcript_params: Fr,
+        rns_params: &BaseRnsParameters<Bn256>,
         ipa_conf: &IpaConfig<G1>,
     ) -> anyhow::Result<bool> {
+        let proof = self;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         if commitments.len() != ys.len() {
@@ -255,7 +241,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         for i in 0..num_queries {
             assert!(zs[i] < domain_size);
             let start = std::time::Instant::now();
-            transcript.commit_point(&commitments[i])?;
+            transcript.commit_point(&commitments[i], &rns_params)?;
             println!(
                 "updated transcript {}/{}: {} s",
                 3 * i,
@@ -283,7 +269,7 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
         let r = transcript.get_challenge();
         // println!("r: {:?}", r);
 
-        transcript.commit_point(&proof.d)?;
+        transcript.commit_point(&proof.d, &rns_params)?;
 
         let t = transcript.get_challenge();
         // println!("t: {:?}", t);
@@ -319,19 +305,19 @@ impl BatchProof<G1, PoseidonBn256Transcript> for Bn256BatchProof {
             e.add_assign(&tmp); // e += c_i * helper_scalars_i
         }
 
-        transcript.commit_point(&e.into_affine())?;
+        transcript.commit_point(&e.into_affine(), &rns_params)?;
 
         let mut e_minus_d = e;
         e_minus_d.sub_assign(&proof.d.into_projective());
 
         let transcript_params = transcript.get_challenge();
         println!("transcript_params: {:?}", transcript_params);
-        Bn256Ipa::check_proof(
+        proof.ipa.check(
             e_minus_d.into_affine(),
-            proof.ipa,
             t,
             g_2_t,
             transcript_params,
+            rns_params,
             ipa_conf,
         )
     }

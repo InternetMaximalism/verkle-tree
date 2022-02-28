@@ -2,18 +2,24 @@ use ff_utils::bn256_fr::Bn256Fr;
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
 use franklin_crypto::bellman::pairing::{CurveAffine, Engine};
 use franklin_crypto::bellman::PrimeField;
+use franklin_crypto::plonk::circuit::bigint::field::value_to_limbs;
 use generic_array::typenum;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
 
-use super::utils::{read_field_element_le, write_field_element_le};
+use super::rns::BaseRnsParameters;
+use super::utils::read_field_element_le;
 
 pub trait Bn256Transcript: Sized + Clone {
     type Params;
 
     fn new(init_state: &Fr) -> Self;
     fn commit_field_element(&mut self, element: &Fr) -> anyhow::Result<()>;
-    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1Affine) -> anyhow::Result<()>;
+    fn commit_point(
+        &mut self,
+        point: &<Bn256 as Engine>::G1Affine,
+        rns_params: &BaseRnsParameters<Bn256>,
+    ) -> anyhow::Result<()>;
     fn into_params(self) -> Self::Params;
     fn get_challenge(&self) -> Fr;
 }
@@ -61,12 +67,20 @@ impl Bn256Transcript for PoseidonBn256Transcript {
         Ok(())
     }
 
-    fn commit_point(&mut self, point: &<Bn256 as Engine>::G1Affine) -> anyhow::Result<()> {
+    fn commit_point(
+        &mut self,
+        point: &<Bn256 as Engine>::G1Affine,
+        rns_params: &BaseRnsParameters<Bn256>,
+    ) -> anyhow::Result<()> {
         let (point_x, point_y) = point.into_xy_unchecked();
-        let point_bytes_x = write_field_element_le(&point_x);
-        self.commit_bytes(&point_bytes_x)?;
-        let point_y_bytes = write_field_element_le(&point_y);
-        self.commit_bytes(&point_y_bytes)?;
+        let (binary_limbs, _) = value_to_limbs(Some(point_x), rns_params);
+        for limb in binary_limbs {
+            self.commit_field_element(&limb.unwrap())?;
+        }
+        let (binary_limbs, _) = value_to_limbs(Some(point_y), rns_params);
+        for limb in binary_limbs {
+            self.commit_field_element(&limb.unwrap())?;
+        }
 
         Ok(())
     }
