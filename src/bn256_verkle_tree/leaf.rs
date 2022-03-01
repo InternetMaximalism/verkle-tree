@@ -3,12 +3,11 @@ use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
 use std::collections::HashMap;
 
 use crate::ipa_fr::config::Committer;
-
-use super::trie::{
+use crate::verkle_tree::trie::{
     AbstractKey, AbstractPath, AbstractStem, AbstractValue, IntoFieldElement, LeafNodeValue,
     NodeValue,
 };
-use super::utils::{fill_leaf_tree_poly, point_to_field_element};
+use crate::verkle_tree::utils::{fill_leaf_tree_poly, point_to_field_element};
 
 pub(crate) const LIMBS: usize = 2;
 

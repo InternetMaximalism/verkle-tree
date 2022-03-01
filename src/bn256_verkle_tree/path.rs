@@ -1,8 +1,7 @@
 use franklin_crypto::bellman::PrimeField;
 
 use crate::ipa_fr::utils::read_field_element_le;
-
-use super::trie::{AbstractKey, AbstractPath, AbstractStem, IntoFieldElement};
+use crate::verkle_tree::trie::{AbstractKey, AbstractPath, AbstractStem, IntoFieldElement};
 
 // 32 bytes key
 impl AbstractKey for [u8; 32] {
