@@ -1,4 +1,4 @@
-pub mod batch_proof;
+pub mod batch_proof_fr;
 // pub mod batch_proof_fs;
 // pub mod ipa; // = ipa_fs
 pub mod ipa_fr;

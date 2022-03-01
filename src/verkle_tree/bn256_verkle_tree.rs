@@ -1,7 +1,7 @@
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, G1Affine};
 use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
 
-use crate::batch_proof::BatchProof;
+use crate::batch_proof_fr::BatchProof;
 use crate::ipa_fr::config::{Committer, IpaConfig};
 use crate::ipa_fr::rns::BaseRnsParameters;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
