@@ -21,7 +21,7 @@ See also [verkle_tree_tests](./src/verkle_tree/mod.rs) about how to use this lib
 
 ```rust
 use franklin_crypto::bellman::bn256::{G1Affine};
-use verkle_tree::verkle_tree::{bn256_verkle_tree::VerkleProof, trie::VerkleTree};
+use verkle_tree::verkle_tree::bn256_verkle_tree::{VerkleProofWith32BytesKeyValue, VerkleTreeWith32BytesKeyValue};
 ```
 
 ### Create an empty Verkle tree
@@ -29,7 +29,7 @@ use verkle_tree::verkle_tree::{bn256_verkle_tree::VerkleProof, trie::VerkleTree}
 `VerkleTreeWith32BytesKey::default()` returns a tree consisting of only one root node with no children.
 
 ```rust
-let mut tree = VerkleTreeWith32BytesKey::default();
+let mut tree = VerkleTreeWith32BytesKeyValue::default();
 ```
 
 ### Insert an entry in a Verkle tree
@@ -39,7 +39,7 @@ This method updates the entry to the new value and returns the old value,
 even if the tree already has a value corresponding to the key.
 
 ```rust
-let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKey::insert(&mut tree, key, value);
+let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::insert(&mut tree, key, value);
 ```
 
 ### Remove an entry from a Verkle tree
@@ -48,7 +48,7 @@ let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKey::insert(&mut tree, ke
 If the tree does not have a value corresponding to the key, this method does not change the tree state.
 
 ```rust
-let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKey::remove(&mut tree, &key);
+let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tree, &key);
 ```
 
 ### Get the value from a Verkle tree
@@ -57,7 +57,7 @@ let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKey::remove(&mut tree, &k
 The maximum time it takes to search entries depends on the depth of given Verkle tree.
 
 ```rust
-let value: Option<&[u8; 32]> = VerkleTreeWith32BytesKey::get(&tree, &key);
+let value: Option<&[u8; 32]> = VerkleTreeWith32BytesKeyValue::get(&tree, &key);
 ```
 
 ### Compute the commitment of a Verkle root
@@ -65,27 +65,27 @@ let value: Option<&[u8; 32]> = VerkleTreeWith32BytesKey::get(&tree, &key);
 `VerkleTreeWith32BytesKey::compute_commitment()` computes the digest of given Verkle tree.
 
 ```rust
-let commitment: G1Affine = VerkleTreeWith32BytesKey::compute_commitment(&mut tree)?;
+let commitment: G1Affine = VerkleTreeWith32BytesKeyValue::compute_commitment(&mut tree)?;
 ```
 
 ### Compute the inclusion/exclusion proof of a Verkle tree
 
-`VerkleProof::create()` returns the inclusion/exclusion proof and its auxiliary data.
+`VerkleProofWith32BytesKeyValue::create()` returns the inclusion/exclusion proof and its auxiliary data.
 If `keys` includes one key, `elements.zs[i]` is a child index of the internal node
 corresponding the key prefix of length `i`, and `elements.ys[i]` is the value of that child.
 If `keys` includes two or more keys, compute `elements.zs` and `elements.ys` for each key,
 and concatenate them.
 
 ```rust
-let (proof, elements) = VerkleProof::create(&mut tree, &keys)?;
+let (proof, elements) = VerkleProofWith32BytesKeyValue::create(&mut tree, &keys)?;
 ```
 
 ### Validate an inclusion/exclusion proof
 
-`VerkleProof::check()` returns the validity of given inclusion/exclusion proof.
+`VerkleProofWith32BytesKeyValue::check()` returns the validity of given inclusion/exclusion proof.
 
 ```rust
-let is_valid: bool = VerkleProof::check(&proof, &elements.zs, &elements.ys, &tree.committer)?;
+let is_valid: bool = VerkleProofWith32BytesKeyValue::check(&proof, &elements.zs, &elements.ys, &tree.committer)?;
 ```
 
 ## Details

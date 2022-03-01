@@ -62,12 +62,12 @@ pub struct ExtraProofData<K: AbstractKey> {
 // }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MultiProofCommitments<K: AbstractKey, GA: CurveAffine> {
+pub struct MultiProofWitnesses<K: AbstractKey, GA: CurveAffine> {
     pub commitment_elements: CommitmentElements<GA>,
     pub extra_data_list: Vec<ExtraProofData<K>>,
 }
 
-impl<K: AbstractKey, GA: CurveAffine> Default for MultiProofCommitments<K, GA> {
+impl<K: AbstractKey, GA: CurveAffine> Default for MultiProofWitnesses<K, GA> {
     fn default() -> Self {
         Self {
             commitment_elements: CommitmentElements::default(),
@@ -76,7 +76,7 @@ impl<K: AbstractKey, GA: CurveAffine> Default for MultiProofCommitments<K, GA> {
     }
 }
 
-impl<K: AbstractKey, GA: CurveAffine> MultiProofCommitments<K, GA> {
+impl<K: AbstractKey, GA: CurveAffine> MultiProofWitnesses<K, GA> {
     pub fn merge(&mut self, other: &mut Self) {
         self.commitment_elements
             .merge(&mut other.commitment_elements);

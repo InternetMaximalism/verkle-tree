@@ -247,10 +247,6 @@ where
     pub fn get_precomputed_weights(&self) -> &PrecomputedWeights<GA::Scalar> {
         &self.precomputed_weights
     }
-
-    pub fn get_domain_size(&self) -> usize {
-        self.precomputed_weights.get_domain_size()
-    }
 }
 
 #[test]
@@ -266,11 +262,17 @@ fn test_ensure_length_of_srs_is_valid() {
 pub trait Committer<GA: CurveAffine> {
     type Err: Send + Sync + 'static;
 
+    fn get_domain_size(&self) -> usize;
+
     fn commit(&self, polynomial: &[GA::Scalar]) -> Result<GA, Self::Err>;
 }
 
 impl<GA: CurveAffine> Committer<GA> for IpaConfig<GA> {
     type Err = anyhow::Error;
+
+    fn get_domain_size(&self) -> usize {
+        self.precomputed_weights.get_domain_size()
+    }
 
     fn commit(&self, polynomial: &[GA::Scalar]) -> anyhow::Result<GA> {
         let result = commit::<GA::Projective>(
