@@ -114,10 +114,44 @@ where
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtStatus {
-    AbsentEmpty, // path led to a node with a different stem
-    AbsentOther, // missing child node along the path
-    Present,     // stem was present
+    OtherStem,       // path led to a node with a different stem
+    EmptySuffixTree, // stem is present, but suffix tree is not present
+    OtherKey,        // stem and suffix tree is present
+    Present,         // key is present
+}
+
+impl From<u8> for ExtStatus {
+    fn from(value: u8) -> Self {
+        if value == 0 {
+            ExtStatus::OtherStem
+        } else if value == 1 {
+            ExtStatus::EmptySuffixTree
+        } else if value == 2 {
+            ExtStatus::OtherKey
+        } else if value == 3 {
+            ExtStatus::Present
+        } else {
+            panic!("fail to convert");
+        }
+    }
+}
+
+impl From<usize> for ExtStatus {
+    fn from(value: usize) -> Self {
+        if value == 0 {
+            ExtStatus::OtherStem
+        } else if value == 1 {
+            ExtStatus::EmptySuffixTree
+        } else if value == 2 {
+            ExtStatus::OtherKey
+        } else if value == 3 {
+            ExtStatus::Present
+        } else {
+            panic!("fail to convert");
+        }
+    }
 }
 
 pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {

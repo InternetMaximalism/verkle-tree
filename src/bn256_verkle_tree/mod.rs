@@ -17,7 +17,7 @@ mod bn256_verkle_tree_tests {
     use franklin_crypto::bellman::bn256::Fr;
     use franklin_crypto::bellman::Field;
 
-    use crate::bn256_verkle_tree::proof::VerkleProof;
+    use crate::bn256_verkle_tree::proof::{EncodedVerkleProof, VerkleProof};
     use crate::ipa_fr::config::IpaConfig;
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
 
@@ -41,6 +41,11 @@ mod bn256_verkle_tree_tests {
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
         let (proof, elements) = VerkleProof::create(&mut tree, &[key]).unwrap();
+        let encoded_proof = EncodedVerkleProof::encode(&proof);
+        let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode().unwrap();
+        assert_eq!(decoded_zs, elements.zs);
+        assert_eq!(decoded_ys, elements.ys);
+        assert_eq!(format!("{:?}", decoded_proof), format!("{:?}", proof));
 
         let success = proof
             .check(&elements.zs, &elements.ys, &tree.committer)
@@ -121,11 +126,11 @@ mod bn256_verkle_tree_tests {
         assert_eq!(result.commitment_elements.commitments.len(), 7);
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
-            result.extra_data_list[0].ext_status % 8,
-            ExtStatus::Present as usize
+            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
+            ExtStatus::Present
         );
         assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
-        assert!(result.extra_data_list[0].poa_stems.is_none());
+        assert!(result.extra_data_list[0].poa_stem.is_none());
 
         tree.remove(&keys[0]);
 
@@ -141,11 +146,11 @@ mod bn256_verkle_tree_tests {
         assert_eq!(result.commitment_elements.commitments.len(), 2);
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
-            result.extra_data_list[0].ext_status % 8,
-            ExtStatus::AbsentEmpty as usize
+            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
+            ExtStatus::OtherStem
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
-        assert!(result.extra_data_list[0].poa_stems.is_none());
+        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert!(result.extra_data_list[0].poa_stem.is_none());
 
         let key_absent_other = {
             let mut key = [255u8; 32];
@@ -160,14 +165,14 @@ mod bn256_verkle_tree_tests {
         assert_eq!(result.commitment_elements.elements.zs, [255, 0, 1]);
         assert_eq!(result.commitment_elements.elements.ys.len(), 3);
         assert_eq!(result.commitment_elements.commitments.len(), 3);
-        assert_eq!(result.extra_data_list[0].poa_stems, keys[1].get_stem());
+        assert_eq!(result.extra_data_list[0].poa_stem, keys[1].get_stem());
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
-            result.extra_data_list[0].ext_status % 8,
-            ExtStatus::AbsentOther as usize
+            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
+            ExtStatus::EmptySuffixTree
         );
         assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
-        assert!(result.extra_data_list[0].poa_stems.is_some());
+        assert!(result.extra_data_list[0].poa_stem.is_some());
 
         let key_absent_empty = {
             let mut key = [255u8; 32];
@@ -183,10 +188,10 @@ mod bn256_verkle_tree_tests {
         assert_eq!(result.commitment_elements.commitments.len(), 1);
         assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
-            result.extra_data_list[0].ext_status % 8,
-            ExtStatus::AbsentEmpty as usize
+            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
+            ExtStatus::OtherStem
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 0);
-        assert!(result.extra_data_list[0].poa_stems.is_none());
+        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert!(result.extra_data_list[0].poa_stem.is_none());
     }
 }
