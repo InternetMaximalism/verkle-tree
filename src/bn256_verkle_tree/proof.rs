@@ -28,7 +28,7 @@ where
     pub commitments: Vec<GA>,        // commitments, sorted by their path in the tree
     pub extra_data_list: Vec<ExtraProofData<K>>,
     pub keys: Vec<K>,
-    pub values: Vec<L::Value>,
+    pub values: Vec<Option<L::Value>>,
     _width: std::marker::PhantomData<C>,
 }
 
@@ -61,12 +61,10 @@ where
             elements,
         } = commitment_elements;
 
-        let mut values: Vec<[u8; 32]> = vec![];
+        let mut values: Vec<Option<[u8; 32]>> = vec![];
         for k in keys {
-            let val = tree
-                .get(k)
-                .ok_or_else(|| anyhow::anyhow!("key {:?} is not found in this tree", k))?;
-            values.push(*val);
+            let val = tree.get(k);
+            values.push(val.map(|v| *v));
         }
 
         let multi_proof = BatchProof::<G1Affine>::create(

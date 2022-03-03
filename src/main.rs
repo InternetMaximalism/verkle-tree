@@ -4,7 +4,11 @@ use verkle_tree::bn256_verkle_tree::VerkleTreeWith32BytesKeyValue;
 use verkle_tree::ipa_fr::config::IpaConfig;
 
 fn sample_code() {
-    let committer = IpaConfig::new(256);
+    let domain_size = 256; // = tree width
+
+    // prover's view
+
+    let committer = IpaConfig::new(domain_size);
     let mut tree = VerkleTreeWith32BytesKeyValue::new(committer.clone());
 
     let key = [1u8; 32];
@@ -25,12 +29,30 @@ fn sample_code() {
     println!("elements.zs: {:?}", elements.zs);
     println!("elements.ys: {:?}", elements.ys);
 
+    // verifier's view
+
+    // let committer = IpaConfig::new(domain_size);
+
     let is_valid: bool =
         VerkleProof::check(&proof, &elements.zs, &elements.ys, &committer).unwrap();
     println!("is_valid: {:?}", is_valid);
 
+    // prover's view
+
     let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tree, &key);
     println!("old_value: {:?}", old_value);
+
+    let keys = [key];
+    let (proof, elements) = VerkleProof::create(&mut tree, &keys).unwrap();
+    println!("proof: {:?}", proof);
+    println!("elements.zs: {:?}", elements.zs);
+    println!("elements.ys: {:?}", elements.ys);
+
+    // verifier's view
+
+    let is_valid: bool =
+        VerkleProof::check(&proof, &elements.zs, &elements.ys, &committer).unwrap();
+    println!("is_valid: {:?}", is_valid);
 }
 
 fn main() {

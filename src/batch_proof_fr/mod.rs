@@ -311,7 +311,6 @@ impl BatchProof<G1Affine> {
         e_minus_d.sub_assign(&proof.d.into_projective());
 
         let transcript_params = transcript.get_challenge();
-        println!("transcript_params: {:?}", transcript_params);
         proof.ipa.check(
             e_minus_d.into_affine(),
             t,
