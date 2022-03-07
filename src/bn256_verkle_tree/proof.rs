@@ -189,7 +189,7 @@ where
                             },
                         },
                         extra_data_list: vec![ExtraProofData {
-                            ext_status: ExtStatus::EmptySuffixTree as usize | (depth << 3),
+                            ext_status: ExtStatus::OtherStem as usize | (depth << 3),
                             poa_stem: stem.clone(),
                         }],
                     });
@@ -236,7 +236,7 @@ where
                             },
                         },
                         extra_data_list: vec![ExtraProofData {
-                            ext_status: ExtStatus::OtherStem as usize | (depth << 3),
+                            ext_status: ExtStatus::EmptySuffixTree as usize | (depth << 3),
                             poa_stem: K::Stem::default(),
                         }],
                     });
@@ -343,10 +343,10 @@ where
             }
 
             let commitment = *info.get_commitment().unwrap();
+
             for group in groups.clone() {
                 let zi = group[0].get_branch_at(depth);
 
-                // Build the list of elements for this level
                 let yi = fi.clone()[zi];
                 multi_proof_commitments
                     .commitment_elements
@@ -358,12 +358,14 @@ where
                             fs: vec![fi.clone()],
                         },
                     });
-            }
+                // }
 
-            // Loop over again, collecting the children's proof elements
-            // This is because the order is breadth-first.
-            for group in groups {
-                let child = children.get(&group[0].get_branch_at(depth));
+                // // Loop over again, collecting the children's proof elements
+                // // This is because the order is breadth-first.
+                // for group in groups {
+                let zi = group[0].get_branch_at(depth);
+
+                let child = children.get(&zi);
                 if let Some(child) = child {
                     multi_proof_commitments.merge(&mut get_witnesses(child, &group, committer)?);
                 } else {
@@ -372,7 +374,7 @@ where
                     multi_proof_commitments
                         .extra_data_list
                         .push(ExtraProofData {
-                            ext_status: ExtStatus::OtherStem as usize | ((depth + 1) << 3),
+                            ext_status: ExtStatus::Empty as usize | ((depth + 1) << 3),
                             poa_stem: K::Stem::default(),
                         });
                 }
@@ -383,11 +385,10 @@ where
     }
 }
 
-/// `group_keys` groups a set of keys based on their byte at a given depth.
-pub fn group_keys<P, K>(keys: &[K], depth: usize) -> Vec<Vec<K>>
+pub fn group_entries<T, F>(keys: &[T], get_branch: F) -> Vec<Vec<T>>
 where
-    P: Default + AbstractPath,
-    K: AbstractKey<Path = P>,
+    T: Sized + Clone,
+    F: Fn(&T) -> usize,
 {
     // special case: only one key left
     if keys.len() == 1 {
@@ -398,9 +399,9 @@ where
     let mut groups = Vec::with_capacity(keys.len());
     let mut first_key = 0;
     for last_key in 1..keys.len() {
-        let key = keys[last_key];
-        let key_idx = key.get_branch_at(depth);
-        let prev_idx = keys[last_key - 1].get_branch_at(depth);
+        let key = &keys[last_key];
+        let key_idx = get_branch(key);
+        let prev_idx = get_branch(&keys[last_key - 1]);
 
         if key_idx != prev_idx {
             groups.push(keys[first_key..last_key].to_vec());
@@ -413,14 +414,357 @@ where
     groups
 }
 
+/// `group_keys` groups a set of keys based on their byte at a given depth.
+pub fn group_keys<P, K>(keys: &[K], depth: usize) -> Vec<Vec<K>>
+where
+    P: Default + AbstractPath,
+    K: AbstractKey<Path = P>,
+{
+    group_entries(keys, |key| key.get_branch_at(depth))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncodedVerkleProof {
-    pub root_commitment: EncodedEcPoint,
     pub multi_proof: EncodedBatchProof,
     pub keys: Vec<[u8; 32]>,
     pub values: Vec<[u8; 32]>, // None = 0
     pub extra_data_list: Vec<EncodedExtProofData>,
-    pub commitments_list: Vec<Vec<EncodedEcPoint>>,
+    pub commitments_list: Vec<EncodedEcPoint>,
+}
+
+impl EncodedVerkleProof {
+    pub fn encode(
+        verkle_proof: &VerkleProof<
+            [u8; 32],
+            LeafNodeWith32BytesValue<G1Affine>,
+            G1Affine,
+            IpaConfig<G1Affine>,
+        >,
+    ) -> Self {
+        let commitments = verkle_proof
+            .commitments
+            .iter()
+            .map(|commitment| EncodedEcPoint::encode(commitment))
+            .collect::<Vec<_>>();
+        println!("commitments: {:?}", commitments);
+        let entries = verkle_proof
+            .keys
+            .iter()
+            .zip(&verkle_proof.values)
+            .zip(&verkle_proof.extra_data_list)
+            .map(|((&key, &value), extra_data)| (key, value, extra_data.clone()))
+            .collect::<Vec<_>>();
+        let cs = &mut vec![];
+        set_index(cs, &mut verkle_proof.commitments.iter(), &entries, 0).unwrap();
+        let cs = cs
+            .iter()
+            .map(|commitment| EncodedEcPoint::encode(commitment))
+            .collect::<Vec<_>>();
+
+        EncodedVerkleProof {
+            multi_proof: EncodedBatchProof::encode(&verkle_proof.multi_proof),
+            keys: verkle_proof.keys.clone(),
+            values: verkle_proof
+                .values
+                .iter()
+                .map(|value| value.map_or([0u8; 32], |v| v))
+                .collect::<Vec<_>>(),
+            extra_data_list: verkle_proof
+                .extra_data_list
+                .iter()
+                .map(|extra_data| EncodedExtProofData::encode(extra_data))
+                .collect::<Vec<_>>(),
+            commitments_list: cs,
+        }
+    }
+
+    pub fn decode(
+        &self,
+    ) -> anyhow::Result<(
+        VerkleProof<[u8; 32], LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>,
+        Vec<usize>,
+        Vec<Fr>,
+    )> {
+        println!("commitments: {:?}", self.commitments_list);
+        let commitments_list = self
+            .commitments_list
+            .iter()
+            .map(|commitment| commitment.decode())
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let extra_data_list = self
+            .extra_data_list
+            .iter()
+            .map(|extra_data| extra_data.decode())
+            .collect::<Vec<_>>();
+
+        let entries = self
+            .keys
+            .iter()
+            .zip(&self.values)
+            .zip(&extra_data_list)
+            .map(|((&key, &value), extra_data)| (key, value, extra_data.clone()))
+            .collect::<Vec<_>>();
+
+        let rc = commitments_list[0];
+
+        let (cs, zs, ys, ps) = get_index(&mut commitments_list.iter().skip(1), &rc, &entries, 0)?;
+        println!(
+            "ps: {:?}",
+            ps.iter()
+                .map(|&commitment| commitment.map(|v| EncodedEcPoint::encode(&v)))
+                .collect::<Vec<_>>()
+        );
+
+        let values = self
+            .values
+            .iter()
+            .zip(&extra_data_list)
+            .map(
+                |(value, extra_data)| match ExtStatus::from(extra_data.ext_status % 8) {
+                    ExtStatus::Present => Some(*value),
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let verkle_tree = VerkleProof {
+            commitments: cs,
+            multi_proof: self.multi_proof.decode()?,
+            keys: self.keys.clone(),
+            values,
+            extra_data_list: extra_data_list.clone(),
+            _width: std::marker::PhantomData,
+        };
+        Ok((verkle_tree, zs, ys))
+    }
+}
+
+fn set_index<'a, I: Iterator<Item = &'a G1Affine>>(
+    cs: &mut Vec<G1Affine>,
+    commitments: &mut I,
+    entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
+    depth: usize,
+) -> anyhow::Result<()> {
+    let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
+
+    let mut same_stem = true;
+    for (key, _, _) in entries.iter().skip(1) {
+        if key.get_stem() != entries[0].0.get_stem() {
+            same_stem = false;
+        }
+    }
+
+    if same_stem && depth != 0 {
+        // leaf node
+        let (_, _, first_extra_data) = &entries[0];
+        match ExtStatus::from(first_extra_data.ext_status % 8) {
+            ExtStatus::Empty => {}
+            ExtStatus::OtherStem => {
+                cs.push(*commitments.next().unwrap());
+                commitments.next();
+            }
+            ExtStatus::EmptySuffixTree => {
+                cs.push(*commitments.next().unwrap());
+                commitments.next();
+                commitments.next();
+            }
+            ExtStatus::OtherKey => {
+                cs.push(*commitments.next().unwrap());
+                commitments.next();
+                commitments.next();
+                cs.push(*commitments.next().unwrap());
+            }
+            ExtStatus::Present => {
+                cs.push(*commitments.next().unwrap());
+                commitments.next();
+                commitments.next();
+                cs.push(*commitments.next().unwrap());
+                for _ in 0..(LIMBS - 1) {
+                    commitments.next();
+                }
+            }
+        }
+
+        for (_, _, extra_data) in entries.iter().skip(1) {
+            // leaf node
+            match ExtStatus::from(extra_data.ext_status % 8) {
+                ExtStatus::Empty => {
+                    // NOTICE: A empty leaf does not have the same stem with a non-empty leaf.
+                }
+                ExtStatus::OtherStem => {
+                    commitments.next();
+                    commitments.next();
+                }
+                ExtStatus::EmptySuffixTree => {
+                    commitments.next();
+                    commitments.next();
+                    commitments.next();
+                }
+                ExtStatus::OtherKey => {
+                    commitments.next();
+                    commitments.next();
+                    commitments.next();
+                    cs.push(*commitments.next().unwrap());
+                }
+                ExtStatus::Present => {
+                    commitments.next();
+                    commitments.next();
+                    commitments.next();
+                    cs.push(*commitments.next().unwrap());
+                    for _ in 0..(LIMBS - 1) {
+                        commitments.next();
+                    }
+                }
+            }
+        }
+    } else {
+        let cc = commitments.next().unwrap();
+        println!("cc: {:?}", EncodedEcPoint::encode(cc));
+        cs.push(*cc);
+        set_index(cs, commitments, &groups[0], depth + 1)?;
+        for group in groups.iter().skip(1) {
+            commitments.next();
+            // }
+
+            // for group in groups {
+            set_index(cs, commitments, &group, depth + 1)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn get_index<'a, I: Iterator<Item = &'a G1Affine>>(
+    commitments: &mut I,
+    rc: &G1Affine,
+    entries: &[([u8; 32], [u8; 32], ExtraProofData<[u8; 32]>)],
+    depth: usize,
+) -> anyhow::Result<(Vec<G1Affine>, Vec<usize>, Vec<Fr>, Vec<Option<G1Affine>>)> {
+    let mut cs = vec![];
+    let mut zs = vec![];
+    let mut ys = vec![];
+    let mut ps = vec![];
+
+    let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
+
+    let mut same_stem = true;
+    for (key, _, _) in entries.iter().skip(1) {
+        if key.get_stem() != entries[0].0.get_stem() {
+            same_stem = false;
+        }
+    }
+
+    let width = 256;
+    if same_stem && depth != 0 {
+        for (key, value, extra_data) in entries {
+            // leaf node
+            match ExtStatus::from(extra_data.ext_status % 8) {
+                ExtStatus::Empty => {
+                    cs.push(*rc);
+                    ps.push(None);
+                    zs.push(key.get_branch_at(depth - 1));
+                    ys.push(Fr::zero());
+                }
+                ExtStatus::OtherStem => {
+                    cs.push(*rc);
+                    ps.push(None);
+                    zs.push(0);
+                    ys.push(Fr::one());
+                    cs.push(*rc);
+                    ps.push(None);
+                    zs.push(1);
+                    ys.push(read_field_element_le(&extra_data.poa_stem.unwrap())?);
+                }
+                ExtStatus::EmptySuffixTree => {
+                    cs.push(*rc);
+                    ps.push(None);
+                    zs.push(0);
+                    ys.push(Fr::one());
+                    cs.push(*rc);
+                    ps.push(None);
+                    zs.push(1);
+                    ys.push(read_field_element_le(&key.get_stem().unwrap())?);
+                    cs.push(*rc);
+                    ps.push(None);
+                    let suffix = key.get_suffix();
+                    let limb_index = (LIMBS * suffix) / width;
+                    zs.push(2 + limb_index);
+                    ys.push(Fr::zero());
+                }
+                ExtStatus::OtherKey => {
+                    let cc = commitments.next().unwrap();
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    zs.push(0);
+                    ys.push(Fr::one());
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    zs.push(1);
+                    ys.push(read_field_element_le(&key.get_stem().unwrap())?);
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    let suffix = key.get_suffix();
+                    let limb_index = (LIMBS * suffix) / width;
+                    let slot = (LIMBS * suffix) % width;
+                    zs.push(2 + limb_index);
+                    ys.push(point_to_field_element(cc)?);
+                    cs.push(*cc);
+                    ps.push(None);
+                    zs.push(slot);
+                    ys.push(Fr::zero());
+                }
+                ExtStatus::Present => {
+                    let cc = commitments.next().unwrap();
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    zs.push(0);
+                    ys.push(Fr::one());
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    zs.push(1);
+                    ys.push(read_field_element_le(&key.get_stem().unwrap())?);
+                    cs.push(*rc);
+                    ps.push(Some(*cc));
+                    let suffix = key.get_suffix();
+                    let limb_index = (LIMBS * suffix) / width;
+                    let slot = (LIMBS * suffix) % width;
+                    zs.push(2 + limb_index);
+                    ys.push(point_to_field_element(cc)?);
+                    let mut tmp_leaves = [Fr::zero(); LIMBS];
+                    leaf_to_commitments(&mut tmp_leaves, *value)?;
+                    for i in 0..LIMBS {
+                        cs.push(*cc);
+                        ps.push(None);
+                        zs.push(slot + i);
+                        ys.push(tmp_leaves[i]);
+                    }
+                }
+            }
+        }
+    } else {
+        let mut tmp_cc_list = vec![];
+
+        for group in groups.clone() {
+            let zi = group[0].0.get_branch_at(depth);
+            let cc = commitments.next().unwrap();
+            zs.push(zi);
+            cs.push(*rc);
+            tmp_cc_list.push(cc);
+            // }
+
+            // for (group, cc) in groups.iter().zip(tmp_cc_list) {
+            let yi = point_to_field_element(cc).unwrap();
+            ys.push(yi);
+            ps.push(Some(*cc));
+            let (mut children_cs, mut children_zs, mut children_ys, mut children_ps) =
+                get_index(commitments, cc, &group, depth + 1)?;
+            cs.append(&mut children_cs);
+            zs.append(&mut children_zs);
+            ys.append(&mut children_ys);
+            ps.append(&mut children_ps);
+        }
+    }
+
+    Ok((cs, zs, ys, ps))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,211 +786,9 @@ impl EncodedExtProofData {
             ext_status: self.ext_status as usize,
             poa_stem: match ExtStatus::from(self.ext_status % 8) {
                 ExtStatus::OtherStem => Some(self.poa_stem),
-                _ => None,
+                _ => <[u8; 32] as AbstractKey>::Stem::default(),
             },
         }
-    }
-}
-
-impl EncodedVerkleProof {
-    pub fn encode(
-        verkle_proof: &VerkleProof<
-            [u8; 32],
-            LeafNodeWith32BytesValue<G1Affine>,
-            G1Affine,
-            IpaConfig<G1Affine>,
-        >,
-    ) -> Self {
-        let commitments = verkle_proof
-            .commitments
-            .iter()
-            .map(|commitment| EncodedEcPoint::encode(commitment))
-            .collect::<Vec<_>>();
-        let mut commitments_list = vec![];
-        let root_commitment = commitments[0].clone();
-        let mut offset = 0;
-        for extra_data in verkle_proof.extra_data_list.iter() {
-            assert_eq!(commitments[offset], root_commitment);
-            let depth = extra_data.ext_status >> 3;
-
-            // internal nodes
-            let mut cs = vec![];
-            if depth == 0 {
-                // empty root node
-                commitments_list.push(cs);
-                continue;
-            }
-
-            for i in (offset + 1)..(offset + depth) {
-                cs.push(commitments[i].clone());
-            }
-            offset += depth;
-
-            // leaf node
-            match ExtStatus::from(extra_data.ext_status % 8) {
-                ExtStatus::OtherStem => {
-                    cs.push(commitments[offset].clone());
-                    offset += 2;
-                }
-                ExtStatus::EmptySuffixTree => {
-                    cs.push(commitments[offset].clone());
-                    offset += 3;
-                }
-                ExtStatus::OtherKey => {
-                    cs.push(commitments[offset].clone());
-                    cs.push(commitments[offset + 3].clone());
-                    offset += 4;
-                }
-                ExtStatus::Present => {
-                    cs.push(commitments[offset].clone());
-                    cs.push(commitments[offset + 3].clone());
-                    offset += 3 + LIMBS; // 5
-                }
-            }
-
-            commitments_list.push(cs);
-        }
-
-        EncodedVerkleProof {
-            root_commitment,
-            multi_proof: EncodedBatchProof::encode(&verkle_proof.multi_proof),
-            keys: verkle_proof.keys.clone(),
-            values: verkle_proof
-                .values
-                .iter()
-                .map(|value| value.map_or([0u8; 32], |v| v))
-                .collect::<Vec<_>>(),
-            extra_data_list: verkle_proof
-                .extra_data_list
-                .iter()
-                .map(|extra_data| EncodedExtProofData::encode(extra_data))
-                .collect::<Vec<_>>(),
-            commitments_list,
-        }
-    }
-
-    pub fn decode(
-        &self,
-    ) -> anyhow::Result<(
-        VerkleProof<[u8; 32], LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>,
-        Vec<usize>,
-        Vec<Fr>,
-    )> {
-        let width = 256;
-        let root_commitment = self.root_commitment.decode()?;
-        let commitments_list = self
-            .commitments_list
-            .iter()
-            .map(|commitments| {
-                commitments
-                    .iter()
-                    .map(|commitment| commitment.decode())
-                    .collect::<anyhow::Result<Vec<_>>>()
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let extra_data_list = self
-            .extra_data_list
-            .iter()
-            .map(|extra_data| extra_data.decode())
-            .collect::<Vec<_>>();
-        let mut zs = vec![];
-        let mut ys = vec![];
-        let mut commitments = vec![];
-        for (((cs, extra_data), key), value) in commitments_list
-            .iter()
-            .zip(&self.extra_data_list)
-            .zip(&self.keys)
-            .zip(&self.values)
-        {
-            commitments.push(root_commitment);
-            let depth = (extra_data.ext_status >> 3) as usize;
-
-            if depth == 0 {
-                // empty root node
-                continue;
-            }
-
-            // internal nodes
-            for (&c, &branch) in cs.iter().zip(key).take(depth) {
-                zs.push(branch as usize);
-                ys.push(point_to_field_element(&c)?);
-                commitments.push(c);
-            }
-
-            zs.push(0);
-            ys.push(Fr::one());
-
-            // leaf node
-            match ExtStatus::from(extra_data.ext_status % 8) {
-                ExtStatus::OtherStem => {
-                    commitments.push(cs[depth - 1]);
-                    zs.push(1);
-                    ys.push(read_field_element_le(&extra_data.poa_stem)?);
-                }
-                ExtStatus::EmptySuffixTree => {
-                    commitments.push(cs[depth - 1]);
-                    zs.push(1);
-                    ys.push(read_field_element_le(&extra_data.poa_stem)?);
-                    commitments.push(cs[depth - 1]);
-                    let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    zs.push(2 + limb_index);
-                    ys.push(Fr::zero());
-                }
-                ExtStatus::OtherKey => {
-                    commitments.push(cs[depth - 1]);
-                    zs.push(1);
-                    ys.push(read_field_element_le(&extra_data.poa_stem)?);
-                    commitments.push(cs[depth - 1]);
-                    let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
-                    zs.push(2 + limb_index);
-                    ys.push(point_to_field_element(&cs[depth])?);
-                    commitments.push(cs[depth]);
-                    zs.push(slot);
-                    ys.push(Fr::zero());
-                }
-                ExtStatus::Present => {
-                    commitments.push(cs[depth - 1]);
-                    zs.push(1);
-                    ys.push(read_field_element_le(&extra_data.poa_stem)?);
-                    commitments.push(cs[depth - 1]);
-                    let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
-                    zs.push(2 + limb_index);
-                    ys.push(point_to_field_element(&cs[depth])?);
-                    let mut tmp_leaves = [Fr::zero(); LIMBS];
-                    leaf_to_commitments(&mut tmp_leaves, *value)?;
-                    for i in 0..LIMBS {
-                        commitments.push(cs[depth]);
-                        zs.push(slot + i);
-                        ys.push(tmp_leaves[i]);
-                    }
-                }
-            }
-        }
-
-        let verkle_tree = VerkleProof {
-            commitments,
-            multi_proof: self.multi_proof.decode()?,
-            keys: self.keys.clone(),
-            values: self
-                .values
-                .iter()
-                .zip(&extra_data_list)
-                .map(
-                    |(value, extra_data)| match ExtStatus::from(extra_data.ext_status % 8) {
-                        ExtStatus::Present => Some(*value),
-                        _ => None,
-                    },
-                )
-                .collect::<Vec<_>>(),
-            extra_data_list: extra_data_list.clone(),
-            _width: std::marker::PhantomData,
-        };
-        Ok((verkle_tree, zs, ys))
     }
 }
 
@@ -668,6 +810,85 @@ impl EncodedBatchProof {
         Ok(BatchProof {
             ipa: self.ipa.decode()?,
             d: self.d.decode()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncodedElements {
+    pub zs: Vec<u8>,
+    pub ys: Vec<EncodedScalar>,
+    pub fs: Vec<Vec<EncodedScalar>>,
+}
+
+impl EncodedElements {
+    pub fn encode(elements: &Elements<Fr>) -> Self {
+        Self {
+            zs: elements.zs.iter().map(|&zi| zi as u8).collect::<Vec<_>>(),
+            ys: elements
+                .ys
+                .iter()
+                .map(|yi| EncodedScalar::encode(yi))
+                .collect::<Vec<_>>(),
+            fs: elements
+                .fs
+                .iter()
+                .map(|fi| {
+                    fi.iter()
+                        .map(|f| EncodedScalar::encode(f))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+        }
+    }
+
+    pub fn decode(&self) -> anyhow::Result<Elements<Fr>> {
+        Ok(Elements {
+            zs: self.zs.iter().map(|&zi| zi as usize).collect::<Vec<_>>(),
+            ys: self
+                .ys
+                .iter()
+                .map(|yi| yi.decode())
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            fs: self
+                .fs
+                .iter()
+                .map(|fi| {
+                    fi.iter()
+                        .map(|f| f.decode())
+                        .collect::<anyhow::Result<Vec<_>>>()
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncodedCommitmentElements {
+    pub commitments: Vec<EncodedEcPoint>,
+    pub elements: EncodedElements,
+}
+
+impl EncodedCommitmentElements {
+    pub fn encode(elements: &CommitmentElements<G1Affine>) -> Self {
+        Self {
+            commitments: elements
+                .commitments
+                .iter()
+                .map(|commitment| EncodedEcPoint::encode(commitment))
+                .collect::<Vec<_>>(),
+            elements: EncodedElements::encode(&elements.elements),
+        }
+    }
+
+    pub fn decode(&self) -> anyhow::Result<CommitmentElements<G1Affine>> {
+        Ok(CommitmentElements {
+            commitments: self
+                .commitments
+                .iter()
+                .map(|commitment| commitment.decode())
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            elements: self.elements.decode()?,
         })
     }
 }
@@ -714,7 +935,7 @@ impl EncodedIpaProof {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EncodedEcPoint([u8; 32]);
+pub struct EncodedEcPoint(Encoded32Bytes);
 
 impl EncodedEcPoint {
     pub fn encode(point: &G1Affine) -> Self {
@@ -724,25 +945,12 @@ impl EncodedEcPoint {
             raw[i] = *v;
         }
 
-        if raw
-            == [
-                3, 187, 82, 33, 90, 207, 69, 42, 151, 205, 202, 187, 250, 253, 74, 153, 175, 123,
-                67, 78, 79, 118, 92, 20, 56, 242, 109, 17, 190, 96, 209, 76,
-            ]
-        {
-            println!("point: {:?}", point);
-            let (_, y) = point.into_xy_unchecked();
-            println!("y: {:?}", y);
-            let mut y2 = y;
-            y2.square();
-            println!("y^2: {:?}", y2);
-        }
-
-        Self(raw)
+        Self(Encoded32Bytes::encode(&raw))
     }
 
     pub fn decode(&self) -> anyhow::Result<G1Affine> {
-        let result = into_affine_unchecked(self.0)?;
+        let raw = self.0.decode()?;
+        let result = into_affine_unchecked(raw)?;
 
         Ok(result)
     }
@@ -783,19 +991,18 @@ fn into_affine_unchecked(bytes: [u8; 32]) -> Result<G1Affine, GroupDecodingError
         let x = Fq::from_repr(x)
             .map_err(|e| GroupDecodingError::CoordinateDecodingError("x coordinate", e))?;
 
-        println!("bytes: {:?}", hex::encode(bytes));
         get_point_from_x(x, greatest).ok_or(GroupDecodingError::NotOnCurve)
     }
 }
 
 fn get_point_from_x(x: Fq, greatest: bool) -> Option<G1Affine> {
-    let mut b_repr = <Fq as PrimeField>::Repr::default();
-    b_repr.0[0] = 0x7a17caa950ad28d7;
-    b_repr.0[1] = 0x1f6ac17ae15521b9;
-    b_repr.0[2] = 0x334bea4e696bd284;
-    b_repr.0[3] = 0x2a1f6744ce179d8e;
-    let b = Fq::from_repr(b_repr).unwrap();
-    println!("b: {:?}", b);
+    // let mut b_repr = <Fq as PrimeField>::Repr::default();
+    // b_repr.0[0] = 0x7a17caa950ad28d7;
+    // b_repr.0[1] = 0x1f6ac17ae15521b9;
+    // b_repr.0[2] = 0x334bea4e696bd284;
+    // b_repr.0[3] = 0x2a1f6744ce179d8e;
+    // let b = Fq::from_repr(b_repr).unwrap();
+    let b = G1Affine::b_coeff();
 
     // Compute x^3 + b
     let mut x3b = x;
@@ -803,9 +1010,7 @@ fn get_point_from_x(x: Fq, greatest: bool) -> Option<G1Affine> {
     x3b.mul_assign(&x);
     x3b.add_assign(&b);
 
-    println!("x3b: {:?}", x3b);
     x3b.sqrt().map(|y| {
-        println!("y: {:?}", y);
         let mut negy = y;
         negy.negate();
 
@@ -814,7 +1019,7 @@ fn get_point_from_x(x: Fq, greatest: bool) -> Option<G1Affine> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EncodedScalar([u8; 32]);
+pub struct EncodedScalar(Encoded32Bytes);
 
 impl EncodedScalar {
     pub fn encode(scalar: &Fr) -> Self {
@@ -824,10 +1029,30 @@ impl EncodedScalar {
             raw[i] = *v;
         }
 
-        Self(raw)
+        Self(Encoded32Bytes::encode(&raw))
     }
 
     pub fn decode(&self) -> anyhow::Result<Fr> {
-        read_field_element_le::<Fr>(&self.0)
+        let raw = self.0.decode()?;
+        read_field_element_le::<Fr>(&raw)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Encoded32Bytes(String);
+
+impl Encoded32Bytes {
+    pub fn encode(bytes: &[u8; 32]) -> Self {
+        Self(hex::encode(bytes))
+    }
+
+    pub fn decode(&self) -> anyhow::Result<[u8; 32]> {
+        let raw = hex::decode(&self.0)?;
+        let mut bytes = [0u8; 32];
+        for (i, v) in raw.iter().enumerate() {
+            bytes[i] = *v;
+        }
+
+        Ok(bytes)
     }
 }

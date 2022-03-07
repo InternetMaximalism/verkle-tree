@@ -1,8 +1,9 @@
 use franklin_crypto::bellman::{CurveAffine, PrimeField, SqrtField};
+use serde::{Deserialize, Serialize};
 
 use super::trie::AbstractKey;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Elements<F: PrimeField + SqrtField> {
     pub zs: Vec<usize>,
     pub ys: Vec<F>,

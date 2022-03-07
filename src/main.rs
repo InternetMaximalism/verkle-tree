@@ -1,5 +1,5 @@
 use franklin_crypto::bellman::bn256::G1Affine;
-use verkle_tree::bn256_verkle_tree::proof::VerkleProof;
+use verkle_tree::bn256_verkle_tree::proof::{EncodedVerkleProof, VerkleProof};
 use verkle_tree::bn256_verkle_tree::VerkleTreeWith32BytesKeyValue;
 use verkle_tree::ipa_fr::config::IpaConfig;
 
@@ -24,17 +24,16 @@ fn sample_code() {
     println!("commitment: {:?}", commitment);
 
     let keys = [key];
-    let (proof, elements) = VerkleProof::create(&mut tree, &keys).unwrap();
-    println!("proof: {:?}", proof);
-    println!("elements.zs: {:?}", elements.zs);
-    println!("elements.ys: {:?}", elements.ys);
+    let (proof, _) = VerkleProof::create(&mut tree, &keys).unwrap();
+    let encoded_proof = EncodedVerkleProof::encode(&proof);
+    println!("encoded_proof: {:?}", encoded_proof);
 
     // verifier's view
 
     // let committer = IpaConfig::new(domain_size);
 
-    let is_valid: bool =
-        VerkleProof::check(&proof, &elements.zs, &elements.ys, &committer).unwrap();
+    let (decoded_proof, zs, ys) = encoded_proof.decode().unwrap();
+    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer).unwrap();
     println!("is_valid: {:?}", is_valid);
 
     // prover's view
@@ -43,15 +42,14 @@ fn sample_code() {
     println!("old_value: {:?}", old_value);
 
     let keys = [key];
-    let (proof, elements) = VerkleProof::create(&mut tree, &keys).unwrap();
-    println!("proof: {:?}", proof);
-    println!("elements.zs: {:?}", elements.zs);
-    println!("elements.ys: {:?}", elements.ys);
+    let (proof, _) = VerkleProof::create(&mut tree, &keys).unwrap();
+    let encoded_proof = EncodedVerkleProof::encode(&proof);
+    println!("encoded_proof: {:?}", encoded_proof);
 
     // verifier's view
 
-    let is_valid: bool =
-        VerkleProof::check(&proof, &elements.zs, &elements.ys, &committer).unwrap();
+    let (decoded_proof, zs, ys) = encoded_proof.decode().unwrap();
+    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer).unwrap();
     println!("is_valid: {:?}", is_valid);
 }
 
