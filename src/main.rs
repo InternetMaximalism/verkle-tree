@@ -35,21 +35,21 @@ fn sample_code() -> Result<(), Box<dyn std::error::Error>> {
     let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer)?;
     println!("is_valid: {:?}", is_valid);
 
-    // prover's view
+    // // prover's view
 
-    let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tree, &key);
-    println!("old_value: {:?}", old_value);
+    // let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tree, &key);
+    // println!("old_value: {:?}", old_value);
 
-    let keys = [key];
-    let (proof, _) = VerkleProof::create(&mut tree, &keys)?;
-    let encoded_proof = EncodedVerkleProof::encode(&proof);
-    println!("encoded_proof: {:?}", encoded_proof);
+    // let keys = [key];
+    // let (proof, _) = VerkleProof::create(&mut tree, &keys)?;
+    // let encoded_proof = EncodedVerkleProof::encode(&proof);
+    // println!("encoded_proof: {:?}", encoded_proof);
 
-    // verifier's view
+    // // verifier's view
 
-    let (decoded_proof, zs, ys) = encoded_proof.decode()?;
-    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer)?;
-    println!("is_valid: {:?}", is_valid);
+    // let (decoded_proof, zs, ys) = encoded_proof.decode()?;
+    // let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer)?;
+    // println!("is_valid: {:?}", is_valid);
 
     Ok(())
 }
