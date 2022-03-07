@@ -3,7 +3,7 @@ use verkle_tree::bn256_verkle_tree::proof::{EncodedVerkleProof, VerkleProof};
 use verkle_tree::bn256_verkle_tree::VerkleTreeWith32BytesKeyValue;
 use verkle_tree::ipa_fr::config::IpaConfig;
 
-fn sample_code() {
+fn sample_code() -> Result<(), Box<dyn std::error::Error>> {
     let domain_size = 256; // = tree width
 
     // prover's view
@@ -19,12 +19,11 @@ fn sample_code() {
     let stored_value: Option<&[u8; 32]> = VerkleTreeWith32BytesKeyValue::get(&tree, &key);
     println!("stored_value: {:?}", stored_value);
 
-    let commitment: G1Affine =
-        VerkleTreeWith32BytesKeyValue::compute_commitment(&mut tree).unwrap();
+    let commitment: G1Affine = VerkleTreeWith32BytesKeyValue::compute_commitment(&mut tree)?;
     println!("commitment: {:?}", commitment);
 
     let keys = [key];
-    let (proof, _) = VerkleProof::create(&mut tree, &keys).unwrap();
+    let (proof, _) = VerkleProof::create(&mut tree, &keys)?;
     let encoded_proof = EncodedVerkleProof::encode(&proof);
     println!("encoded_proof: {:?}", encoded_proof);
 
@@ -32,8 +31,8 @@ fn sample_code() {
 
     // let committer = IpaConfig::new(domain_size);
 
-    let (decoded_proof, zs, ys) = encoded_proof.decode().unwrap();
-    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer).unwrap();
+    let (decoded_proof, zs, ys) = encoded_proof.decode()?;
+    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer)?;
     println!("is_valid: {:?}", is_valid);
 
     // prover's view
@@ -42,17 +41,19 @@ fn sample_code() {
     println!("old_value: {:?}", old_value);
 
     let keys = [key];
-    let (proof, _) = VerkleProof::create(&mut tree, &keys).unwrap();
+    let (proof, _) = VerkleProof::create(&mut tree, &keys)?;
     let encoded_proof = EncodedVerkleProof::encode(&proof);
     println!("encoded_proof: {:?}", encoded_proof);
 
     // verifier's view
 
-    let (decoded_proof, zs, ys) = encoded_proof.decode().unwrap();
-    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer).unwrap();
+    let (decoded_proof, zs, ys) = encoded_proof.decode()?;
+    let is_valid: bool = VerkleProof::check(&decoded_proof, &zs, &ys, &committer)?;
     println!("is_valid: {:?}", is_valid);
+
+    Ok(())
 }
 
 fn main() {
-    sample_code();
+    sample_code().unwrap();
 }
