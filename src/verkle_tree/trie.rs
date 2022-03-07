@@ -90,12 +90,10 @@ where
 //     V: AbstractValue,
 // {
 //     type Err: Send + Sync + 'static;
-//     type Commitment: PartialEq + Eq;
+//     type Digest: PartialEq + Eq;
 //     type ProofCommitments: PartialEq + Eq;
 
-//     fn compute_commitment(&mut self) -> Result<Self::Commitment, Self::Err>;
-
-//     fn get_witnesses(&self, keys: &[K]) -> Result<Self::ProofCommitments, Self::Err>;
+//     fn compute_digest(&mut self) -> Result<Self::Digest, Self::Err>;
 // }
 
 impl<P, K, L, GA, C> VerkleTree<K, L, GA, C>
@@ -109,8 +107,8 @@ where
     GA::Base: PrimeField,
 {
     /// Computes the digest of given Verkle tree.
-    pub fn compute_commitment(&mut self) -> anyhow::Result<GA> {
-        self.root.compute_commitment(&self.committer)
+    pub fn compute_digest(&mut self) -> anyhow::Result<GA::Scalar> {
+        self.root.compute_digest(&self.committer)
     }
 }
 
@@ -221,10 +219,6 @@ where
         self.len() == 0
     }
 
-    fn get_commitment_mut(&mut self) -> &mut Option<GA>;
-
-    fn get_commitment(&self) -> Option<&GA>;
-
     fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar>;
 
     fn get_digest(&self) -> Option<&GA::Scalar>;
@@ -245,11 +239,11 @@ where
 
     fn remove(&mut self, key: &usize) -> Option<Self::Value>;
 
-    fn compute_commitment<C: Committer<GA>>(
+    fn compute_digest<C: Committer<GA>>(
         &mut self,
         stem: &mut K::Stem,
         committer: &C,
-    ) -> anyhow::Result<GA>;
+    ) -> anyhow::Result<GA::Scalar>;
 
     // fn get_witnesses<C: Committer<GA>>(
     //     &self,
@@ -284,21 +278,25 @@ where
     fn len(&self) -> usize {
         self.num_nonempty_children
     }
-
-    fn get_commitment_mut(&mut self) -> &mut Option<GA> {
-        &mut self.commitment
-    }
-
-    fn get_commitment(&self) -> Option<&GA> {
-        (&self.commitment).into()
-    }
-
     fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar> {
         &mut self.digest
     }
 
     fn get_digest(&self) -> Option<&GA::Scalar> {
         (&self.digest).into()
+    }
+}
+
+impl<GA> InternalNodeValue<GA>
+where
+    GA: CurveAffine,
+{
+    pub fn get_commitment_mut(&mut self) -> &mut Option<GA> {
+        &mut self.commitment
+    }
+
+    pub fn get_commitment(&self) -> Option<&GA> {
+        (&self.commitment).into()
     }
 }
 
@@ -370,12 +368,12 @@ where
         }
     }
 
-    pub fn get_commitment(&self) -> Option<&GA> {
-        match self {
-            Self::Leaf { info, .. } => info.get_commitment(),
-            Self::Internal { info, .. } => info.get_commitment(),
-        }
-    }
+    // pub fn get_commitment(&self) -> Option<&GA> {
+    //     match self {
+    //         Self::Leaf { info, .. } => info.get_commitment(),
+    //         Self::Internal { info, .. } => info.get_commitment(),
+    //     }
+    // }
 
     pub fn get_digest(&self) -> Option<&GA::Scalar> {
         match self {
@@ -631,13 +629,16 @@ where
     GA: CurveAffine,
     GA::Base: PrimeField,
 {
-    pub fn compute_commitment<C: Committer<GA>>(&mut self, committer: &C) -> anyhow::Result<GA> {
-        if let Some(c) = self.get_commitment() {
-            return Ok(c.clone());
+    pub fn compute_digest<C: Committer<GA>>(
+        &mut self,
+        committer: &C,
+    ) -> anyhow::Result<GA::Scalar> {
+        if let Some(d) = self.get_digest() {
+            return Ok(*d);
         }
 
         match self {
-            VerkleNode::Leaf { stem, info, .. } => info.compute_commitment::<C>(stem, committer),
+            VerkleNode::Leaf { stem, info, .. } => info.compute_digest::<C>(stem, committer),
             VerkleNode::Internal {
                 children,
                 info:
@@ -649,8 +650,7 @@ where
                 let width = committer.get_domain_size();
                 let mut children_digests = vec![GA::Scalar::zero(); width];
                 for (&i, child) in children.iter_mut() {
-                    child.compute_commitment(committer)?;
-                    children_digests[i] = *child.get_digest().unwrap();
+                    children_digests[i] = child.compute_digest(committer)?;
                 }
 
                 let tmp_commitment =
@@ -660,7 +660,7 @@ where
                 let _ = std::mem::replace(commitment, Some(tmp_commitment));
                 let _ = std::mem::replace(digest, Some(tmp_digest));
 
-                Ok(tmp_commitment)
+                Ok(tmp_digest)
             }
         }
     }

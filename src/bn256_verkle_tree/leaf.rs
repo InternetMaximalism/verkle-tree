@@ -55,20 +55,25 @@ where
         self.num_nonempty_children
     }
 
-    fn get_commitment_mut(&mut self) -> &mut Option<GA> {
-        &mut self.commitment
-    }
-
-    fn get_commitment(&self) -> Option<&GA> {
-        (&self.commitment).into()
-    }
-
     fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar> {
         &mut self.digest
     }
 
     fn get_digest(&self) -> Option<&GA::Scalar> {
         (&self.digest).into()
+    }
+}
+
+impl<GA> LeafNodeWith32BytesValue<GA>
+where
+    GA: CurveAffine,
+{
+    pub fn get_commitment_mut(&mut self) -> &mut Option<GA> {
+        &mut self.commitment
+    }
+
+    pub fn get_commitment(&self) -> Option<&GA> {
+        (&self.commitment).into()
     }
 }
 
@@ -79,7 +84,7 @@ pub fn compute_commitment_of_leaf_node<K, GA, C>(
     committer: &C,
     stem: &mut K::Stem,
     info: &mut LeafNodeWith32BytesValue<GA>,
-) -> anyhow::Result<GA>
+) -> anyhow::Result<GA::Scalar>
 where
     K: AbstractKey,
     K::Stem: IntoFieldElement<GA::Scalar>,
@@ -126,7 +131,7 @@ where
     let _ = std::mem::replace(&mut info.commitment, Some(tmp_commitment));
     let _ = std::mem::replace(&mut info.digest, Some(tmp_digest));
 
-    Ok(tmp_commitment)
+    Ok(tmp_digest)
 }
 
 impl<P, K, GA> LeafNodeValue<K, GA> for LeafNodeWith32BytesValue<GA>
@@ -169,11 +174,11 @@ where
         old_leaf
     }
 
-    fn compute_commitment<C: Committer<GA>>(
+    fn compute_digest<C: Committer<GA>>(
         &mut self,
         stem: &mut K::Stem,
         committer: &C,
-    ) -> anyhow::Result<GA> {
+    ) -> anyhow::Result<GA::Scalar> {
         compute_commitment_of_leaf_node::<K, _, _>(committer, stem, self)
     }
 }

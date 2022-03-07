@@ -54,7 +54,7 @@ where
     ) -> anyhow::Result<(Self, Elements<Fr>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
-        tree.compute_commitment()?;
+        tree.compute_digest()?;
 
         let MultiProofWitnesses {
             commitment_elements,

@@ -65,10 +65,10 @@ let stored_value: Option<&[u8; 32]> = tree.get(&key);
 
 ### Compute the commitment of a Verkle root
 
-`VerkleTreeWith32BytesKeyValue::compute_commitment()` computes the digest of given Verkle tree.
+`VerkleTreeWith32BytesKeyValue::compute_digest()` computes the digest of given Verkle tree.
 
 ```rust
-let commitment: G1Affine = tree.compute_commitment()?;
+let digest: Fr = tree.compute_digest()?;
 ```
 
 ### Compute the inclusion/exclusion proof of a Verkle tree (Verkle proof)

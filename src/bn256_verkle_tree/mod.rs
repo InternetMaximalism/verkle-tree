@@ -41,7 +41,7 @@ mod bn256_verkle_tree_tests {
         let mut value = [0u8; 32];
         value[0] = 27;
         tree.insert(key, value);
-        tree.compute_commitment().unwrap();
+        tree.compute_digest().unwrap();
 
         let result = tree.get_witnesses(&[key]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
@@ -114,7 +114,7 @@ mod bn256_verkle_tree_tests {
             keys.push(key);
         }
 
-        tree.compute_commitment().unwrap();
+        tree.compute_digest().unwrap();
 
         let result = tree.get_witnesses(&[keys[0]]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
@@ -137,7 +137,7 @@ mod bn256_verkle_tree_tests {
 
         tree.remove(&keys[0]);
 
-        tree.compute_commitment().unwrap();
+        tree.compute_digest().unwrap();
 
         let key_empty_leaf = keys[0];
 
@@ -306,7 +306,7 @@ mod bn256_verkle_tree_tests {
             key
         };
 
-        tree.compute_commitment().unwrap();
+        tree.compute_digest().unwrap();
 
         let mut sorted_keys = [
             keys[3],
