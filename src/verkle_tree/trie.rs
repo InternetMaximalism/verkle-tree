@@ -114,13 +114,52 @@ where
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtStatus {
-    AbsentEmpty, // path led to a node with a different stem
-    AbsentOther, // missing child node along the path
-    Present,     // stem was present
+    Empty,           // path led to a empty node
+    OtherStem,       // path led to a node with a different stem
+    EmptySuffixTree, // stem is present, but suffix tree is not present
+    OtherKey,        // stem and suffix tree is present
+    Present,         // key is present
 }
 
-pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
+impl From<u8> for ExtStatus {
+    fn from(value: u8) -> Self {
+        if value == 0 {
+            ExtStatus::Empty
+        } else if value == 1 {
+            ExtStatus::OtherStem
+        } else if value == 2 {
+            ExtStatus::EmptySuffixTree
+        } else if value == 3 {
+            ExtStatus::OtherKey
+        } else if value == 4 {
+            ExtStatus::Present
+        } else {
+            panic!("fail to convert");
+        }
+    }
+}
+
+impl From<usize> for ExtStatus {
+    fn from(value: usize) -> Self {
+        if value == 0 {
+            ExtStatus::Empty
+        } else if value == 1 {
+            ExtStatus::OtherStem
+        } else if value == 2 {
+            ExtStatus::EmptySuffixTree
+        } else if value == 3 {
+            ExtStatus::OtherKey
+        } else if value == 4 {
+            ExtStatus::Present
+        } else {
+            panic!("fail to convert");
+        }
+    }
+}
+
+pub trait AbstractKey: Clone + Copy + Debug + Ord {
     type Stem: AbstractStem + Default;
     type Path: AbstractPath + Default;
 
@@ -133,11 +172,9 @@ pub trait AbstractKey: Clone + Copy + Debug + PartialEq + Eq {
     fn get_branch_at(&self, depth: usize) -> usize;
 }
 
-pub trait AbstractValue: Clone + Copy + Debug + PartialEq + Eq {}
+pub trait AbstractValue: Clone + Copy + Debug + Eq {}
 
-pub trait AbstractPath:
-    Sized + Clone + Debug + Default + PartialEq + Eq + IntoIterator<Item = usize>
-{
+pub trait AbstractPath: Sized + Clone + Debug + Default + Eq + IntoIterator<Item = usize> {
     type RemovePrefixError: Debug + Send + Sync + 'static;
 
     fn get_next_path_and_branch(&self) -> (Self, usize);
@@ -162,7 +199,7 @@ pub trait AbstractPath:
     fn push(&mut self, value: usize);
 }
 
-pub trait AbstractStem: Clone + Debug + PartialEq + Eq {
+pub trait AbstractStem: Clone + Debug + Eq {
     type Path: AbstractPath;
 
     fn to_path(&self) -> Self::Path;

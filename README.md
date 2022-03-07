@@ -27,10 +27,12 @@ use verkle_tree::bn256_verkle_tree::VerkleTreeWith32BytesKeyValue;
 
 ### Create an empty Verkle tree
 
-`VerkleTreeWith32BytesKeyValue::default()` returns a tree consisting of only one root node with no children.
+`VerkleTreeWith32BytesKeyValue::new()` returns a tree consisting of only one root node with no children.
 
 ```rust
-let mut tree = VerkleTreeWith32BytesKeyValue::default();
+let domain_size = 256;
+let committer = IpaConfig::new(domain_size);
+let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
 ```
 
 ### Insert an entry in a Verkle tree
@@ -40,7 +42,7 @@ This method updates the entry to the new value and returns the old value,
 even if the tree already has a value corresponding to the key.
 
 ```rust
-let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::insert(&mut tree, key, value);
+let old_value: Option<[u8; 32]> = tree.insert(key, value);
 ```
 
 ### Remove an entry from a Verkle tree
@@ -49,7 +51,7 @@ let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::insert(&mut tre
 If the tree does not have a value corresponding to the key, this method does not change the tree state.
 
 ```rust
-let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tree, &key);
+let old_value: Option<[u8; 32]> = tree.remove(&key);
 ```
 
 ### Get the value from a Verkle tree
@@ -58,7 +60,7 @@ let old_value: Option<[u8; 32]> = VerkleTreeWith32BytesKeyValue::remove(&mut tre
 The maximum time it takes to search entries depends on the depth of given Verkle tree.
 
 ```rust
-let stored_value: Option<&[u8; 32]> = VerkleTreeWith32BytesKeyValue::get(&tree, &key);
+let stored_value: Option<&[u8; 32]> = tree.get(&key);
 ```
 
 ### Compute the commitment of a Verkle root
@@ -66,10 +68,10 @@ let stored_value: Option<&[u8; 32]> = VerkleTreeWith32BytesKeyValue::get(&tree, 
 `VerkleTreeWith32BytesKeyValue::compute_commitment()` computes the digest of given Verkle tree.
 
 ```rust
-let commitment: G1Affine = VerkleTreeWith32BytesKeyValue::compute_commitment(&mut tree)?;
+let commitment: G1Affine = tree.compute_commitment()?;
 ```
 
-### Compute the inclusion/exclusion proof of a Verkle tree
+### Compute the inclusion/exclusion proof of a Verkle tree (Verkle proof)
 
 `VerkleProof::create()` returns the inclusion/exclusion proof and its auxiliary data.
 If `keys` includes one key, `elements.zs[i]` is a child index of the internal node
@@ -79,14 +81,41 @@ and concatenate them.
 
 ```rust
 let (proof, elements) = VerkleProof::create(&mut tree, &keys)?;
+let zs = elements.zs;
+let ys = elements.ys;
+```
+
+### Encode Verkle proof
+
+**under development**
+
+`EncodedVerkleProof::encode()` returns a Verkle proof in an serializable form.
+It omits duplications and elements that can be calculated from other elements.
+
+```rust
+let encoded_proof = EncodedVerkleProof::encode(&proof);
+```
+
+### Decode Verkle proof
+
+**under development**
+
+`EncodedVerkleProof::decode()` returns a Verkle proof in an easy-to-calculate form.
+`zs` and `ys` can be restored from `proof`.
+
+```rust
+let (proof, zs, ys) = encoded_proof.decode()?;
 ```
 
 ### Validate an inclusion/exclusion proof
 
 `VerkleProof::check()` returns the validity of given inclusion/exclusion proof.
+The verification does not use `elements.fs`, which has information on all child nodes.
 
 ```rust
-let is_valid: bool = VerkleProof::check(&proof, &elements.zs, &elements.ys, &tree.committer)?;
+let domain_size = 256;
+let committer = IpaConfig::new(domain_size);
+let is_valid: bool = VerkleProof::check(&proof, &zs, &ys, &committer)?;
 ```
 
 ## Details
