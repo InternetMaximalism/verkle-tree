@@ -260,15 +260,15 @@ where
     GA: CurveAffine,
 {
     /// The number of children which are `Some` rather than `None`.
-    pub(crate) num_nonempty_children: usize,
+    num_nonempty_children: usize,
 
     /// The commitment of this node.
     /// If it has not computed yet, `commitment` set `None`.
-    pub(crate) commitment: Option<GA>,
+    commitment: Option<GA>,
 
     /// The digest of `commitment`.
     /// If it has not computed yet, `digest` set `None`.
-    pub(crate) digest: Option<GA::Scalar>,
+    digest: Option<GA::Scalar>,
 }
 
 impl<GA> NodeValue<GA> for InternalNodeValue<GA>
@@ -278,6 +278,7 @@ where
     fn len(&self) -> usize {
         self.num_nonempty_children
     }
+
     fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar> {
         &mut self.digest
     }
@@ -462,17 +463,9 @@ where
                     };
 
                     match &mut new_branch {
-                        VerkleNode::Internal {
-                            children,
-                            info:
-                                InternalNodeValue {
-                                    num_nonempty_children,
-                                    ..
-                                },
-                            ..
-                        } => {
+                        VerkleNode::Internal { children, info, .. } => {
                             children.insert(next_branch_of_inserting_key, leaf_node);
-                            *num_nonempty_children += 1;
+                            info.num_nonempty_children += 1;
                         }
                         VerkleNode::Leaf { .. } => {
                             panic!("unreachable code");
@@ -490,14 +483,11 @@ where
             VerkleNode::Internal {
                 path,
                 children,
-                info:
-                    InternalNodeValue {
-                        commitment, digest, ..
-                    },
+                info,
                 ..
             } => {
-                let _ = commitment.take();
-                let _ = digest.take();
+                let _ = info.commitment.take();
+                let _ = info.digest.take();
 
                 let (next_relative_path, next_branch_of_inserting_key) =
                     relative_path.get_next_path_and_branch();
@@ -639,14 +629,8 @@ where
 
         match self {
             VerkleNode::Leaf { stem, info, .. } => info.compute_digest::<C>(stem, committer),
-            VerkleNode::Internal {
-                children,
-                info:
-                    InternalNodeValue {
-                        commitment, digest, ..
-                    },
-                ..
-            } => {
+            VerkleNode::Internal { children, info, .. } => {
+                // TODO: info.compute_digest::<C>(children, committer)
                 let width = committer.get_domain_size();
                 let mut children_digests = vec![GA::Scalar::zero(); width];
                 for (&i, child) in children.iter_mut() {
@@ -657,8 +641,8 @@ where
                     compute_commitment_of_internal_node(committer, children_digests)?;
                 let tmp_digest = point_to_field_element(&tmp_commitment)?;
 
-                let _ = std::mem::replace(commitment, Some(tmp_commitment));
-                let _ = std::mem::replace(digest, Some(tmp_digest));
+                let _ = std::mem::replace(&mut info.commitment, Some(tmp_commitment));
+                let _ = std::mem::replace(&mut info.digest, Some(tmp_digest));
 
                 Ok(tmp_digest)
             }

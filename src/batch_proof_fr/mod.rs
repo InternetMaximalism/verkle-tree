@@ -244,7 +244,7 @@ impl BatchProof<G1Affine> {
             transcript.commit_point(&commitments[i], &rns_params)?;
             println!(
                 "updated transcript {}/{}: {} s",
-                3 * i,
+                3 * i + 1,
                 3 * num_queries,
                 start.elapsed().as_micros() as f64 / 1000000.0
             );
@@ -252,7 +252,7 @@ impl BatchProof<G1Affine> {
             transcript.commit_bytes(&zs[i].to_le_bytes())?;
             println!(
                 "updated transcript {}/{}: {} s",
-                3 * i + 1,
+                3 * i + 2,
                 3 * num_queries,
                 start.elapsed().as_micros() as f64 / 1000000.0
             );
@@ -260,7 +260,7 @@ impl BatchProof<G1Affine> {
             transcript.commit_field_element(&ys[i])?;
             println!(
                 "updated transcript {}/{}: {} s",
-                3 * i + 2,
+                3 * i + 3,
                 3 * num_queries,
                 start.elapsed().as_micros() as f64 / 1000000.0
             );

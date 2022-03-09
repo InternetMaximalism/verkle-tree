@@ -11,7 +11,7 @@ use crate::ipa_fr::rns::BaseRnsParameters;
 use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa_fr::utils::{read_field_element_le, write_field_element_le};
 use crate::verkle_tree::trie::{
-    AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement, LeafNodeValue, NodeValue,
+    AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement, LeafNodeValue,
     VerkleNode, VerkleTree,
 };
 use crate::verkle_tree::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
@@ -429,7 +429,7 @@ pub struct EncodedVerkleProof {
     pub keys: Vec<[u8; 32]>,
     pub values: Vec<[u8; 32]>, // None = 0
     pub extra_data_list: Vec<EncodedExtProofData>,
-    pub commitments_list: Vec<EncodedEcPoint>,
+    pub commitments: Vec<EncodedEcPoint>,
 }
 
 impl EncodedVerkleProof {
@@ -441,12 +441,6 @@ impl EncodedVerkleProof {
             IpaConfig<G1Affine>,
         >,
     ) -> Self {
-        let commitments = verkle_proof
-            .commitments
-            .iter()
-            .map(|commitment| EncodedEcPoint::encode(commitment))
-            .collect::<Vec<_>>();
-        println!("commitments: {:?}", commitments);
         let entries = verkle_proof
             .keys
             .iter()
@@ -455,26 +449,25 @@ impl EncodedVerkleProof {
             .map(|((&key, &value), extra_data)| (key, value, extra_data.clone()))
             .collect::<Vec<_>>();
         let cs = &mut vec![];
-        set_index(cs, &mut verkle_proof.commitments.iter(), &entries, 0).unwrap();
-        let cs = cs
-            .iter()
-            .map(|commitment| EncodedEcPoint::encode(commitment))
-            .collect::<Vec<_>>();
+        remove_duplicates(cs, &mut verkle_proof.commitments.iter(), &entries, 0).unwrap();
 
-        EncodedVerkleProof {
+        Self {
             multi_proof: EncodedBatchProof::encode(&verkle_proof.multi_proof),
             keys: verkle_proof.keys.clone(),
             values: verkle_proof
                 .values
                 .iter()
-                .map(|value| value.map_or([0u8; 32], |v| v))
+                .map(|value| value.or_else(|| Some([0u8; 32])).unwrap())
                 .collect::<Vec<_>>(),
             extra_data_list: verkle_proof
                 .extra_data_list
                 .iter()
                 .map(|extra_data| EncodedExtProofData::encode(extra_data))
                 .collect::<Vec<_>>(),
-            commitments_list: cs,
+            commitments: cs
+                .iter()
+                .map(|commitment| EncodedEcPoint::encode(commitment))
+                .collect::<Vec<_>>(),
         }
     }
 
@@ -485,9 +478,8 @@ impl EncodedVerkleProof {
         Vec<usize>,
         Vec<Fr>,
     )> {
-        println!("commitments: {:?}", self.commitments_list);
-        let commitments_list = self
-            .commitments_list
+        let commitments = self
+            .commitments
             .iter()
             .map(|commitment| commitment.decode())
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -505,15 +497,20 @@ impl EncodedVerkleProof {
             .map(|((&key, &value), extra_data)| (key, value, extra_data.clone()))
             .collect::<Vec<_>>();
 
-        let rc = commitments_list[0];
+        let rc = commitments[0];
 
-        let (cs, zs, ys, ps) = get_index(&mut commitments_list.iter().skip(1), &rc, &entries, 0)?;
-        println!(
-            "ps: {:?}",
-            ps.iter()
-                .map(|&commitment| commitment.map(|v| EncodedEcPoint::encode(&v)))
-                .collect::<Vec<_>>()
-        );
+        let mut cs = vec![];
+        let mut zs = vec![];
+        let mut ys = vec![];
+        recover_commitments(
+            &mut cs,
+            &mut zs,
+            &mut ys,
+            &mut commitments.iter().skip(1),
+            &rc,
+            &entries,
+            0,
+        )?;
 
         let values = self
             .values
@@ -526,19 +523,20 @@ impl EncodedVerkleProof {
                 },
             )
             .collect::<Vec<_>>();
-        let verkle_tree = VerkleProof {
+        let verkle_proof = VerkleProof {
             commitments: cs,
             multi_proof: self.multi_proof.decode()?,
             keys: self.keys.clone(),
             values,
-            extra_data_list: extra_data_list.clone(),
+            extra_data_list,
             _width: std::marker::PhantomData,
         };
-        Ok((verkle_tree, zs, ys))
+
+        Ok((verkle_proof, zs, ys))
     }
 }
 
-fn set_index<'a, I: Iterator<Item = &'a G1Affine>>(
+fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
     cs: &mut Vec<G1Affine>,
     commitments: &mut I,
     entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
@@ -546,16 +544,17 @@ fn set_index<'a, I: Iterator<Item = &'a G1Affine>>(
 ) -> anyhow::Result<()> {
     let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
 
+    let (first_key, _, first_extra_data) = &entries[0];
     let mut same_stem = true;
     for (key, _, _) in entries.iter().skip(1) {
-        if key.get_stem() != entries[0].0.get_stem() {
+        if key.get_stem() != first_key.get_stem() {
             same_stem = false;
         }
     }
 
-    if same_stem && depth != 0 {
+    let first_entry_depth = first_extra_data.ext_status >> 3;
+    if same_stem && depth == first_entry_depth {
         // leaf node
-        let (_, _, first_extra_data) = &entries[0];
         match ExtStatus::from(first_extra_data.ext_status % 8) {
             ExtStatus::Empty => {}
             ExtStatus::OtherStem => {
@@ -618,73 +617,59 @@ fn set_index<'a, I: Iterator<Item = &'a G1Affine>>(
         }
     } else {
         let cc = commitments.next().unwrap();
-        println!("cc: {:?}", EncodedEcPoint::encode(cc));
         cs.push(*cc);
-        set_index(cs, commitments, &groups[0], depth + 1)?;
+        remove_duplicates(cs, commitments, &groups[0], depth + 1)?;
         for group in groups.iter().skip(1) {
             commitments.next();
-            // }
-
-            // for group in groups {
-            set_index(cs, commitments, &group, depth + 1)?;
+            remove_duplicates(cs, commitments, &group, depth + 1)?;
         }
     }
 
     Ok(())
 }
 
-fn get_index<'a, I: Iterator<Item = &'a G1Affine>>(
+fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
+    cs: &mut Vec<G1Affine>,
+    zs: &mut Vec<usize>,
+    ys: &mut Vec<Fr>,
     commitments: &mut I,
     rc: &G1Affine,
     entries: &[([u8; 32], [u8; 32], ExtraProofData<[u8; 32]>)],
     depth: usize,
-) -> anyhow::Result<(Vec<G1Affine>, Vec<usize>, Vec<Fr>, Vec<Option<G1Affine>>)> {
-    let mut cs = vec![];
-    let mut zs = vec![];
-    let mut ys = vec![];
-    let mut ps = vec![];
-
+) -> anyhow::Result<()> {
     let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
 
+    let (first_key, _, first_extra_data) = &entries[0];
     let mut same_stem = true;
     for (key, _, _) in entries.iter().skip(1) {
-        if key.get_stem() != entries[0].0.get_stem() {
+        if key.get_stem() != first_key.get_stem() {
             same_stem = false;
         }
     }
 
     let width = 256;
-    if same_stem && depth != 0 {
+    let first_entry_depth = first_extra_data.ext_status >> 3;
+    if same_stem && depth == first_entry_depth {
         for (key, value, extra_data) in entries {
             // leaf node
             match ExtStatus::from(extra_data.ext_status % 8) {
-                ExtStatus::Empty => {
-                    cs.push(*rc);
-                    ps.push(None);
-                    zs.push(key.get_branch_at(depth - 1));
-                    ys.push(Fr::zero());
-                }
+                ExtStatus::Empty => {}
                 ExtStatus::OtherStem => {
                     cs.push(*rc);
-                    ps.push(None);
                     zs.push(0);
                     ys.push(Fr::one());
                     cs.push(*rc);
-                    ps.push(None);
                     zs.push(1);
                     ys.push(read_field_element_le(&extra_data.poa_stem.unwrap())?);
                 }
                 ExtStatus::EmptySuffixTree => {
                     cs.push(*rc);
-                    ps.push(None);
                     zs.push(0);
                     ys.push(Fr::one());
                     cs.push(*rc);
-                    ps.push(None);
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
-                    ps.push(None);
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     zs.push(2 + limb_index);
@@ -693,37 +678,30 @@ fn get_index<'a, I: Iterator<Item = &'a G1Affine>>(
                 ExtStatus::OtherKey => {
                     let cc = commitments.next().unwrap();
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     zs.push(0);
                     ys.push(Fr::one());
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     let slot = (LIMBS * suffix) % width;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
                     cs.push(*cc);
-                    ps.push(None);
                     zs.push(slot);
                     ys.push(Fr::zero());
                 }
                 ExtStatus::Present => {
                     let cc = commitments.next().unwrap();
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     zs.push(0);
                     ys.push(Fr::one());
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
-                    ps.push(Some(*cc));
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     let slot = (LIMBS * suffix) % width;
@@ -733,7 +711,6 @@ fn get_index<'a, I: Iterator<Item = &'a G1Affine>>(
                     leaf_to_commitments(&mut tmp_leaves, *value)?;
                     for i in 0..LIMBS {
                         cs.push(*cc);
-                        ps.push(None);
                         zs.push(slot + i);
                         ys.push(tmp_leaves[i]);
                     }
@@ -741,30 +718,26 @@ fn get_index<'a, I: Iterator<Item = &'a G1Affine>>(
             }
         }
     } else {
-        let mut tmp_cc_list = vec![];
-
         for group in groups.clone() {
-            let zi = group[0].0.get_branch_at(depth);
-            let cc = commitments.next().unwrap();
+            let (key, _, extra_data) = &group[0];
+            let zi = key.get_branch_at(depth);
             zs.push(zi);
             cs.push(*rc);
-            tmp_cc_list.push(cc);
-            // }
-
-            // for (group, cc) in groups.iter().zip(tmp_cc_list) {
-            let yi = point_to_field_element(cc).unwrap();
-            ys.push(yi);
-            ps.push(Some(*cc));
-            let (mut children_cs, mut children_zs, mut children_ys, mut children_ps) =
-                get_index(commitments, cc, &group, depth + 1)?;
-            cs.append(&mut children_cs);
-            zs.append(&mut children_zs);
-            ys.append(&mut children_ys);
-            ps.append(&mut children_ps);
+            if (extra_data.ext_status >> 3) == depth + 1
+                && ExtStatus::from(extra_data.ext_status % 8) == ExtStatus::Empty
+            {
+                let yi = Fr::zero();
+                ys.push(yi);
+            } else {
+                let cc = commitments.next().unwrap();
+                let yi = point_to_field_element(cc).unwrap();
+                ys.push(yi);
+                recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1)?;
+            }
         }
     }
 
-    Ok((cs, zs, ys, ps))
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
