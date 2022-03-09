@@ -17,9 +17,6 @@ mod bn256_verkle_tree_tests {
     use std::fs::OpenOptions;
     use std::path::Path;
 
-    use franklin_crypto::bellman::bn256::Fr;
-    use franklin_crypto::bellman::Field;
-
     use crate::bn256_verkle_tree::proof::{
         EncodedCommitmentElements, EncodedEcPoint, EncodedVerkleProof, VerkleProof,
     };
@@ -71,7 +68,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 2;
+            key[1] = 102;
             key[2] = 32;
             key[30] = 164;
             key[31] = 254;
@@ -92,7 +89,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 255;
             let value = [0u8; 32];
@@ -102,7 +99,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 254;
             let mut value = [0u8; 32];
@@ -123,36 +120,50 @@ mod bn256_verkle_tree_tests {
         println!("extra_data_list: {:?}", result.extra_data_list);
         assert_eq!(
             result.commitment_elements.elements.zs,
-            [13, 2, 0, 1, 3, 252, 253]
+            [13, 102, 0, 1, 3, 252, 253]
         );
-        assert_eq!(result.commitment_elements.elements.ys.len(), 7);
-        assert_eq!(result.commitment_elements.commitments.len(), 7);
-        assert_eq!(result.extra_data_list.len(), 1);
         assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::Present
+            result.commitment_elements.elements.ys.len(),
+            result.commitment_elements.elements.zs.len()
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(
+            result.commitment_elements.commitments.len(),
+            result.commitment_elements.elements.zs.len()
+        );
+        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::Present);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         tree.remove(&keys[0]);
 
         tree.compute_digest().unwrap();
 
-        let key_empty_leaf = keys[0];
+        let key_empty_leaf = {
+            let mut key = [0u8; 32];
+            key[0] = 13;
+            key[1] = 101;
+            key[30] = 164;
+            key[31] = 254;
+
+            key
+        };
 
         let result = tree.get_witnesses(&[key_empty_leaf]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
-        assert_eq!(result.commitment_elements.elements.zs, [13, 2]);
-        assert_eq!(result.commitment_elements.elements.ys.len(), 2);
-        assert_eq!(result.commitment_elements.commitments.len(), 2);
-        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.commitment_elements.elements.zs, [13, 101]);
         assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::Empty
+            result.commitment_elements.elements.ys.len(),
+            result.commitment_elements.elements.zs.len()
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(
+            result.commitment_elements.commitments.len(),
+            result.commitment_elements.elements.zs.len()
+        );
+        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::Empty);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         let key_other_stem = {
@@ -166,23 +177,26 @@ mod bn256_verkle_tree_tests {
         println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         assert_eq!(result.commitment_elements.elements.zs, [255, 0, 1]);
-        assert_eq!(result.commitment_elements.elements.ys.len(), 3);
-        assert_eq!(result.commitment_elements.commitments.len(), 3);
+        assert_eq!(
+            result.commitment_elements.elements.ys.len(),
+            result.commitment_elements.elements.zs.len()
+        );
+        assert_eq!(
+            result.commitment_elements.commitments.len(),
+            result.commitment_elements.elements.zs.len()
+        );
         assert_eq!(result.extra_data_list[0].poa_stem, keys[1].get_stem());
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::OtherStem
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::OtherStem);
+        assert_eq!(result.extra_data_list[0].depth, 1);
         assert!(result.extra_data_list[0].poa_stem.is_some());
 
         let key_other_key = {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
-            key[31] = 254;
+            key[31] = 253;
 
             key
         };
@@ -191,22 +205,25 @@ mod bn256_verkle_tree_tests {
         println!("commitments: {:?}", result.commitment_elements.commitments);
         assert_eq!(
             result.commitment_elements.elements.zs,
-            [13, 3, 0, 1, 3, 252, 253]
+            [13, 103, 0, 1, 3, 250]
         );
-        assert_eq!(format!("{:?}", result.commitment_elements.elements.ys), "[Fr(0x134d9605e15042f91834ec9439445d588f3cedee8796d5629329e86fd2cbec3f), Fr(0x0b4a2652a4ff4dba812f9c44afebac7e50b7fb480262297bbb9c129f258c2e65), Fr(0x0000000000000000000000000000000000000000000000000000000000000001), Fr(0x00a400000000000000000000000000000000000000000000000000000000030d), Fr(0x0928b1fe44b445433665f46d8d19fa337266509babb8e89c0297b667143f1e42), Fr(0x00000000000000000000000000000001c10000000000000000000000000000eb), Fr(0x000000000000000000000000000000008800000000000000000000000000003c)]");
-        assert_eq!(result.commitment_elements.commitments.len(), 7);
-        assert_eq!(result.extra_data_list.len(), 7);
         assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::OtherKey
+            result.commitment_elements.elements.ys.len(),
+            result.commitment_elements.elements.zs.len()
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert_eq!(
+            result.commitment_elements.commitments.len(),
+            result.commitment_elements.elements.zs.len()
+        );
+        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::OtherKey);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         let key_empty_suffix_tree = {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 17;
 
@@ -215,15 +232,18 @@ mod bn256_verkle_tree_tests {
 
         let result = tree.get_witnesses(&[key_empty_suffix_tree]).unwrap();
         println!("commitments: {:?}", result.commitment_elements.commitments);
-        assert_eq!(result.commitment_elements.elements.zs, [5]);
-        assert_eq!(result.commitment_elements.elements.ys, [Fr::zero()]);
-        assert_eq!(result.commitment_elements.commitments.len(), 1);
-        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.commitment_elements.elements.zs, [13, 103, 0, 1, 2]);
         assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::EmptySuffixTree
+            result.commitment_elements.elements.ys.len(),
+            result.commitment_elements.elements.zs.len()
         );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert_eq!(
+            result.commitment_elements.commitments.len(),
+            result.commitment_elements.elements.zs.len()
+        );
+        assert_eq!(result.extra_data_list.len(), 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::EmptySuffixTree);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
     }
 
@@ -236,7 +256,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 2;
+            key[1] = 102;
             key[2] = 32;
             key[30] = 164;
             key[31] = 254;
@@ -257,7 +277,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 255;
             let value = [0u8; 32];
@@ -267,7 +287,7 @@ mod bn256_verkle_tree_tests {
         {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 254;
             let mut value = [0u8; 32];
@@ -279,6 +299,16 @@ mod bn256_verkle_tree_tests {
             keys.push(key);
         }
 
+        let key_empty_leaf = {
+            let mut key = [0u8; 32];
+            key[0] = 13;
+            key[1] = 101;
+            key[30] = 164;
+            key[31] = 254;
+
+            key
+        };
+
         let key_other_stem = {
             let mut key = [255u8; 32];
             key[30] = 0;
@@ -289,7 +319,7 @@ mod bn256_verkle_tree_tests {
         let key_other_key = {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 253;
 
@@ -299,7 +329,7 @@ mod bn256_verkle_tree_tests {
         let key_empty_suffix_tree = {
             let mut key = [0u8; 32];
             key[0] = 13;
-            key[1] = 3;
+            key[1] = 103;
             key[30] = 164;
             key[31] = 17;
 
@@ -309,6 +339,7 @@ mod bn256_verkle_tree_tests {
         tree.compute_digest().unwrap();
 
         let mut sorted_keys = [
+            key_empty_leaf,
             keys[3],
             key_other_stem,
             key_other_key,
