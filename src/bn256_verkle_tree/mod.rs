@@ -131,11 +131,8 @@ mod bn256_verkle_tree_tests {
             result.commitment_elements.elements.zs.len()
         );
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::Present
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::Present);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         tree.remove(&keys[0]);
@@ -165,11 +162,8 @@ mod bn256_verkle_tree_tests {
             result.commitment_elements.elements.zs.len()
         );
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::Empty
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::Empty);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         let key_other_stem = {
@@ -193,11 +187,8 @@ mod bn256_verkle_tree_tests {
         );
         assert_eq!(result.extra_data_list[0].poa_stem, keys[1].get_stem());
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::OtherStem
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 1);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::OtherStem);
+        assert_eq!(result.extra_data_list[0].depth, 1);
         assert!(result.extra_data_list[0].poa_stem.is_some());
 
         let key_other_key = {
@@ -225,11 +216,8 @@ mod bn256_verkle_tree_tests {
             result.commitment_elements.elements.zs.len()
         );
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::OtherKey
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::OtherKey);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
 
         let key_empty_suffix_tree = {
@@ -254,11 +242,8 @@ mod bn256_verkle_tree_tests {
             result.commitment_elements.elements.zs.len()
         );
         assert_eq!(result.extra_data_list.len(), 1);
-        assert_eq!(
-            ExtStatus::from(result.extra_data_list[0].ext_status % 8),
-            ExtStatus::EmptySuffixTree
-        );
-        assert_eq!(result.extra_data_list[0].ext_status >> 3, 2);
+        assert_eq!(result.extra_data_list[0].status, ExtStatus::EmptySuffixTree);
+        assert_eq!(result.extra_data_list[0].depth, 2);
         assert!(result.extra_data_list[0].poa_stem.is_none());
     }
 

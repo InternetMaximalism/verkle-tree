@@ -1,7 +1,7 @@
 use franklin_crypto::bellman::{CurveAffine, PrimeField, SqrtField};
 use serde::{Deserialize, Serialize};
 
-use super::trie::AbstractKey;
+use super::trie::{AbstractKey, ExtStatus};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Elements<F: PrimeField + SqrtField> {
@@ -52,7 +52,8 @@ impl<GA: CurveAffine> CommitmentElements<GA> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtraProofData<K: AbstractKey> {
-    pub ext_status: usize, // the extension status of each stem
+    pub depth: usize,
+    pub status: ExtStatus, // the extension status of each stem
     pub poa_stem: K::Stem, // stems proving another stem is absent
 }
 
