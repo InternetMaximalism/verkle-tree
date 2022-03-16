@@ -16,7 +16,7 @@ pub struct PrecomputedWeights<F: PrimeField> {
 }
 
 impl<F: PrimeField> PrecomputedWeights<F> {
-    fn new(domain_size: usize) -> Self {
+    pub fn new(domain_size: usize) -> Self {
         // Note there are `domain_size` number of weights, but we are also storing their inverses
         // so we need double the amount of space.
         let mut barycentric_weights = vec![<F as Field>::zero(); domain_size * 2];
@@ -157,8 +157,8 @@ impl<F: PrimeField> PrecomputedWeights<F> {
 }
 
 /// Computes A'(x_j) where x_j is an element in [0, domain_size).
-// This is computed as the product of x_j - x_i where x_i is an element in the domain
-// and x_i is not equal to x_j.
+/// This is computed as the product of x_j - x_i where x_i is an element in the domain
+/// and x_i is not equal to x_j.
 pub fn compute_barycentric_weight_for_element<F: PrimeField>(
     element: usize,
     domain_size: usize,

@@ -4,8 +4,6 @@ use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 use sha2::{Digest, Sha256};
 
-use super::config::DOMAIN_SIZE;
-
 pub fn log2_ceil(value: usize) -> usize {
     assert!(value != 0, "The first argument must be a positive number.");
 
@@ -93,6 +91,20 @@ pub fn write_field_element_be<F: PrimeField>(scalar: &F) -> Vec<u8> {
     result.reverse();
 
     result
+}
+
+const FS_REPR_3_MASK: u64 = 0x03FFFFFFFFFFFFFF; // (250 - 192) bits
+
+pub fn convert_fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs> {
+    let raw_value = value.into_repr();
+    let mut raw_result = <E::Fs as PrimeField>::Repr::default();
+    raw_result.as_mut()[0] = raw_value.as_ref()[0];
+    raw_result.as_mut()[1] = raw_value.as_ref()[1];
+    raw_result.as_mut()[2] = raw_value.as_ref()[2];
+    raw_result.as_mut()[3] = raw_value.as_ref()[3] & FS_REPR_3_MASK;
+    let result = E::Fs::from_repr(raw_result)?;
+
+    Ok(result)
 }
 
 #[test]
@@ -292,25 +304,4 @@ pub fn commit<E: JubjubEngine>(
     let result = multi_scalar::<E>(group_elements, polynomial, jubjub_params)?;
 
     Ok(result)
-}
-
-pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
-    let n = polynomial.len();
-    assert!(
-        n <= DOMAIN_SIZE,
-        "polynomial cannot exceed {} coefficients",
-        DOMAIN_SIZE
-    );
-
-    let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
-    for polynomial_i in polynomial {
-        polynomial_fr.push(read_field_element_le(&polynomial_i.to_le_bytes()).unwrap());
-    }
-
-    // for _ in n..DOMAIN_SIZE {
-    //     polynomial_fr.push(F::zero());
-    // }
-    polynomial_fr.resize(DOMAIN_SIZE, F::zero());
-
-    polynomial_fr
 }
