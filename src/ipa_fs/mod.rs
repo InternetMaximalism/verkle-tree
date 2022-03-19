@@ -6,7 +6,7 @@ pub mod utils;
 use franklin_crypto::babyjubjub::edwards::Point;
 use franklin_crypto::babyjubjub::fs::Fs;
 use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
-use franklin_crypto::bellman::pairing::bn256::Bn256;
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
 use franklin_crypto::bellman::Field;
 
 use crate::ipa_fr::utils::log2_ceil;
@@ -79,10 +79,12 @@ impl IpaProof<Bn256> {
         commitment: Point<Bn256, Unknown>,
         lagrange_poly: &[Fs],
         eval_point: Fs,
-        transcript_params: Fs,
+        transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
         jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<(Self, <Bn256 as JubjubEngine>::Fs)> {
+        dbg!(transcript_params);
+
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf.srs.clone();
         // let _commitment = commit(&current_basis.clone(), lagrange_poly, jubjub_params)?;
@@ -108,6 +110,8 @@ impl IpaProof<Bn256> {
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
+        dbg!(w);
+
         println!(
             "update transcript: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
@@ -164,6 +168,7 @@ impl IpaProof<Bn256> {
             );
 
             let x = transcript.get_challenge(); // x
+            dbg!(x);
 
             let x_inv = x
                 .inverse()
@@ -199,7 +204,7 @@ impl IpaProof<Bn256> {
         commitment: Point<Bn256, Unknown>,
         eval_point: Fs,
         ip: Fs, // inner_prod
-        transcript_params: Fs,
+        transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
         jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<bool> {

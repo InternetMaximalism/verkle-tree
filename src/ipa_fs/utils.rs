@@ -107,6 +107,17 @@ pub fn convert_fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs>
     Ok(result)
 }
 
+pub fn convert_fs_to_fr<E: JubjubEngine>(value: &E::Fs) -> anyhow::Result<E::Fr> {
+    let raw_value = value.into_repr();
+    let mut raw_result = <E::Fr as PrimeField>::Repr::default();
+    for (r, &v) in raw_result.as_mut().iter_mut().zip(raw_value.as_ref()) {
+        let _ = std::mem::replace(r, v);
+    }
+    let result = E::Fr::from_repr(raw_result)?;
+
+    Ok(result)
+}
+
 #[test]
 fn test_read_write_ff() {
     use franklin_crypto::bellman::pairing::bn256::Fr;
