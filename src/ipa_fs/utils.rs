@@ -222,9 +222,9 @@ pub fn fold_scalars<F: PrimeField>(a: &[F], b: &[F], x: &F) -> anyhow::Result<Ve
     }
 
     let mut result = b.to_vec();
-    for i in 0..result.len() {
-        result[i].mul_assign(x);
-        result[i].add_assign(&a[i]);
+    for (result_i, a_i) in result.iter_mut().zip(a) {
+        result_i.mul_assign(x);
+        result_i.add_assign(a_i);
     }
 
     Ok(result)

@@ -79,8 +79,8 @@ impl<F: PrimeField> PrecomputedWeights<F> {
             tmp.negate();
             total_prod.mul_assign(&tmp); // total_prod *= (point - i)
 
-            tmp.mul_assign(&weight);
-            lagrange_evals.push(tmp); // lagrange_evals[i] = (point - i) * weight
+            tmp.mul_assign(&weight); // lagrange_evals[i] = (point - i) * weight
+            lagrange_evals.push(tmp);
         }
 
         // TODO: Calculate the inverses of all elements together.

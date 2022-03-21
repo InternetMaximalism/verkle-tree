@@ -1,5 +1,4 @@
 use ff_utils::bn256_fr::Bn256Fr;
-use ff_utils::bn256_fs::Bn256Fs;
 use franklin_crypto::babyjubjub::edwards::Point;
 use franklin_crypto::babyjubjub::fs::Fs;
 use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
@@ -8,9 +7,7 @@ use generic_array::typenum;
 use neptune::poseidon::PoseidonConstants;
 use neptune::Poseidon;
 
-use super::utils::{
-    convert_fr_to_fs, convert_fs_to_fr, read_field_element_le, write_field_element_le,
-};
+use super::utils::{convert_fr_to_fs, convert_fs_to_fr, read_field_element_le};
 
 pub trait Bn256Transcript: Sized + Clone {
     type Params;
@@ -60,10 +57,8 @@ impl Bn256Transcript for PoseidonBn256Transcript {
 
     fn commit_point<Subgroup>(&mut self, point: &Point<Bn256, Subgroup>) -> anyhow::Result<()> {
         let (point_x, point_y) = point.into_xy();
-        let mut point_bytes = write_field_element_le(&point_x);
-        let mut point_y_bytes = write_field_element_le(&point_y);
-        point_bytes.append(&mut point_y_bytes);
-        self.commit_bytes(&point_bytes)?;
+        self.commit_fr(&point_x)?;
+        self.commit_fr(&point_y)?;
 
         Ok(())
     }
@@ -108,7 +103,6 @@ impl PoseidonBn256Transcript {
 
         let mut h = Poseidon::<Bn256Fr, typenum::U2>::new_with_preimage(&preimage, &constants);
         self.state = h.hash();
-        dbg!(self.state);
 
         Ok(())
     }

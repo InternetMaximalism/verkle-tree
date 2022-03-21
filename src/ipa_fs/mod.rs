@@ -3,11 +3,10 @@ pub mod proof;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::babyjubjub::edwards::Point;
-use franklin_crypto::babyjubjub::fs::Fs;
-use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
-use franklin_crypto::bellman::Field;
+use franklin_crypto::babyjubjub::fs::{Fs, FsRepr};
+use franklin_crypto::babyjubjub::{edwards, JubjubBn256, JubjubEngine, Unknown};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, FrRepr};
+use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 
 use crate::ipa_fr::utils::log2_ceil;
 use crate::ipa_fs::config::Committer;
@@ -76,15 +75,13 @@ mod tests {
 
 impl IpaProof<Bn256> {
     pub fn create(
-        commitment: Point<Bn256, Unknown>,
+        commitment: edwards::Point<Bn256, Unknown>,
         lagrange_poly: &[Fs],
         eval_point: Fs,
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
         jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<(Self, <Bn256 as JubjubEngine>::Fs)> {
-        dbg!(transcript_params);
-
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf.srs.clone();
         // let _commitment = commit(&current_basis.clone(), lagrange_poly, jubjub_params)?;
@@ -99,6 +96,9 @@ impl IpaProof<Bn256> {
             "compute barycentric coefficients of eval_point: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
         );
+        for bi in b.iter() {
+            dbg!(bi.into_repr());
+        }
         if b.len() != ipa_conf.srs.len() {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }
@@ -110,7 +110,6 @@ impl IpaProof<Bn256> {
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
-        dbg!(w);
 
         println!(
             "update transcript: {} s",
@@ -147,10 +146,12 @@ impl IpaProof<Bn256> {
 
             let start = std::time::Instant::now();
             let c_l_1 = commit(g_l, a_r, jubjub_params)?;
-            let c_l = commit(&[c_l_1, qw.clone()], &[Fs::one(), z_l], jubjub_params)?;
+            let c_l = qw.mul(z_l, jubjub_params).add(&c_l_1, jubjub_params);
+            // let c_l = commit(&[c_l_1, qw.clone()], &[one.clone(), z_l], jubjub_params)?;
 
             let c_r_1 = commit(g_r, a_l, jubjub_params)?;
-            let c_r = commit(&[c_r_1, qw.clone()], &[Fs::one(), z_r], jubjub_params)?;
+            let c_r = qw.mul(z_r, jubjub_params).add(&c_r_1, jubjub_params);
+            // let c_r = commit(&[c_r_1, qw.clone()], &[one.clone(), z_r], jubjub_params)?;
             println!(
                 "commit: {} s",
                 start.elapsed().as_micros() as f64 / 1000000.0
@@ -168,7 +169,6 @@ impl IpaProof<Bn256> {
             );
 
             let x = transcript.get_challenge(); // x
-            dbg!(x);
 
             let x_inv = x
                 .inverse()
@@ -201,13 +201,15 @@ impl IpaProof<Bn256> {
 
     pub fn check(
         &self,
-        commitment: Point<Bn256, Unknown>,
+        commitment: edwards::Point<Bn256, Unknown>,
         eval_point: Fs,
         ip: Fs, // inner_prod
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
         jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<bool> {
+        dbg!(transcript_params);
+
         let proof = self;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
@@ -232,16 +234,21 @@ impl IpaProof<Bn256> {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }
 
+        dbg!(commitment.into_xy());
         transcript.commit_point(&commitment)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
 
         let w = transcript.get_challenge();
+        dbg!(w.into_repr());
 
         let q = ipa_conf.q.clone();
         let qw = q.mul(w, jubjub_params);
         let qy = qw.mul(ip, jubjub_params);
+        dbg!(qy.into_xy());
+
         let mut result_c = commitment.add(&qy, jubjub_params);
+        dbg!(result_c.into_xy());
 
         let challenges = generate_challenges(&proof, &mut transcript).unwrap();
 
@@ -249,6 +256,8 @@ impl IpaProof<Bn256> {
 
         // Compute expected commitment
         for (i, x) in challenges.iter().enumerate() {
+            dbg!(x.into_repr());
+
             // println!("challenges_inv: {}/{}", i, challenges.len());
             let l = proof.l[i].clone();
             let r = proof.r[i].clone();
@@ -258,8 +267,13 @@ impl IpaProof<Bn256> {
                 .ok_or(anyhow::anyhow!("cannot find inverse of `x`"))?;
             challenges_inv.push(x_inv);
 
-            let one = Fs::one();
-            result_c = commit(&[result_c, l, r], &[one, *x, x_inv], jubjub_params)?;
+            let result_c_l = l.mul(*x, jubjub_params);
+            let result_c_r = r.mul(x_inv, jubjub_params);
+            result_c = result_c
+                .add(&result_c_l, jubjub_params)
+                .add(&result_c_r, jubjub_params);
+            // result_c = commit(&[result_c, l, r], &[Fs::one(), *x, x_inv], jubjub_params)?;
+            dbg!(result_c.into_xy());
         }
 
         // println!("challenges_inv: {}/{}", challenges.len(), challenges.len());
@@ -284,8 +298,9 @@ impl IpaProof<Bn256> {
             let b_l = b_chunks.next().unwrap().to_vec();
             let b_r = b_chunks.next().unwrap().to_vec();
 
-            b = fold_scalars::<Fs>(&b_l, &b_r, &x_inv.clone())?;
-            current_basis = fold_points(&g_l, &g_r, &x_inv.clone(), jubjub_params)?;
+            dbg!(x_inv.into_repr());
+            b = fold_scalars::<Fs>(&b_l, &b_r, x_inv)?;
+            current_basis = fold_points(&g_l, &g_r, x_inv, jubjub_params)?;
         }
 
         // println!("x_inv: {}/{}", challenges_inv.len(), challenges_inv.len());
@@ -302,12 +317,20 @@ impl IpaProof<Bn256> {
         println!("verification check starts");
         let start = std::time::Instant::now();
 
+        dbg!(current_basis[0].into_xy());
+        dbg!(b[0].into_repr());
+
         // Compute `result = a[0] * G[0] + (a[0] * b[0] * w) * Q`.
         let result1 = current_basis[0].mul(proof.a, jubjub_params); // result1 = a[0] * G[0]
+        dbg!(result1.into_xy());
         let mut part_2a = b[0]; // part_2a = b[0]
+        dbg!(part_2a.into_repr());
         part_2a.mul_assign(&proof.a); // part_2a = a[0] * b[0]
+        dbg!(part_2a.into_repr());
         let result2 = qw.mul(part_2a, jubjub_params); // result2 = a[0] * b[0] * w * Q
+        dbg!(result2.into_xy());
         let result = result1.add(&result2, jubjub_params); // result = result1 + result2
+        dbg!(result.into_xy());
 
         // Ensure `commitment` is equal to `result`.
         let is_ok = result_c.eq(&result);
