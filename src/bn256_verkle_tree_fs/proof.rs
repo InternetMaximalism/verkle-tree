@@ -1,47 +1,47 @@
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fq, Fr, G1Affine};
-use franklin_crypto::bellman::{
-    CurveAffine, Field, GroupDecodingError, PrimeField, PrimeFieldRepr, SqrtField,
-};
+use franklin_crypto::babyjubjub::{edwards, JubjubBn256, JubjubEngine, Unknown};
+use franklin_crypto::bellman::pairing::bn256::Bn256;
+use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 use serde::{Deserialize, Serialize};
 
-use crate::batch_proof_fr::BatchProof;
-use crate::ipa_fr::config::{Committer, IpaConfig};
-use crate::ipa_fr::proof::IpaProof;
-use crate::ipa_fr::rns::BaseRnsParameters;
-use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-use crate::ipa_fr::utils::{read_field_element_le, write_field_element_le};
+use crate::batch_proof_fs::BatchProof;
+use crate::ipa_fs::config::{Committer, IpaConfig};
+use crate::ipa_fs::proof::IpaProof;
+use crate::ipa_fs::transcript::{Bn256Transcript, PoseidonBn256Transcript};
+use crate::ipa_fs::utils::{read_field_element_le, write_field_element_le};
 use crate::verkle_tree::trie::{
-    AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement, LeafNodeValue,
-    VerkleNode, VerkleTree,
+    AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement,
 };
-use crate::verkle_tree::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
-use crate::verkle_tree::witness::{
-    CommitmentElements, Elements, ExtraProofData, MultiProofWitnesses,
+// use crate::verkle_tree::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
+use crate::verkle_tree::witness::{Elements, ExtraProofData};
+use crate::verkle_tree_fs::trie::{LeafNodeValue, VerkleNode, VerkleTree};
+use crate::verkle_tree_fs::utils::{
+    fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element,
 };
+use crate::verkle_tree_fs::witness::{CommitmentElements, MultiProofWitnesses};
 
 use super::leaf::{LeafNodeWith32BytesValue, LIMBS};
 
-#[derive(Clone, Debug)]
-pub struct VerkleProof<K, L, GA, C>
+#[derive(Clone)]
+pub struct VerkleProof<K, L, E, C>
 where
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    C: Committer<GA>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
+    C: Committer<E>,
 {
-    pub multi_proof: BatchProof<GA>, // multi-point argument
-    pub commitments: Vec<GA>,        // commitments, sorted by their path in the tree
+    pub multi_proof: BatchProof<E>, // multi-point argument
+    pub commitments: Vec<edwards::Point<E, Unknown>>, // commitments, sorted by their path in the tree
     pub extra_data_list: Vec<ExtraProofData<K>>,
     pub keys: Vec<K>,
     pub values: Vec<Option<L::Value>>,
     _width: std::marker::PhantomData<C>,
 }
 
-impl<P, K> VerkleProof<K, LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>
+impl<'a, P, K> VerkleProof<K, LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<'a, Bn256>>
 where
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<Fr>,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<<Bn256 as JubjubEngine>::Fs>,
 {
     /// Returns the inclusion/exclusion proof and its auxiliary data.
     /// If `keys` includes one key, `elements.zs[i]` is a child index of the internal node
@@ -49,11 +49,11 @@ where
     /// If `keys` includes two or more keys, compute `elements.zs` and `elements.ys` for each key,
     /// and concatenate them.
     pub fn create(
-        tree: &mut VerkleTree<K, LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>,
+        tree: &mut VerkleTree<K, LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<Bn256>>,
         keys: &[K],
-    ) -> anyhow::Result<(Self, Elements<Fr>)> {
+    ) -> anyhow::Result<(Self, Elements<<Bn256 as JubjubEngine>::Fs>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
+        let jubjub_params = &JubjubBn256::new();
         tree.compute_digest()?;
 
         let MultiProofWitnesses {
@@ -72,13 +72,13 @@ where
             values.push(val.map(|v| *v));
         }
 
-        let multi_proof = BatchProof::<G1Affine>::create(
+        let (multi_proof, _) = BatchProof::<Bn256>::create(
             &commitments,
             &elements.fs,
             &elements.zs,
             transcript.into_params(),
-            rns_params,
             &tree.committer,
+            jubjub_params,
         )?;
         let proof = VerkleProof {
             multi_proof,
@@ -96,48 +96,46 @@ where
     pub fn check(
         &self,
         zs: &[usize],
-        ys: &[Fr],
-        ipa_conf: &IpaConfig<G1Affine>,
+        ys: &[<Bn256 as JubjubEngine>::Fs],
+        ipa_conf: &IpaConfig<Bn256>,
     ) -> anyhow::Result<bool> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        let rns_params = &BaseRnsParameters::<Bn256>::new_for_field(68, 110, 4);
+        let jubjub_params = &JubjubBn256::new();
         self.multi_proof.check(
             &self.commitments.clone(),
             ys,
             zs,
             transcript.into_params(),
-            rns_params,
             ipa_conf,
+            jubjub_params,
         )
     }
 }
 
-impl<P, K, GA, C> VerkleTree<K, LeafNodeWith32BytesValue<GA>, GA, C>
+impl<P, K, E, C> VerkleTree<K, LeafNodeWith32BytesValue<E>, E, C>
 where
-    C: Committer<GA>,
+    C: Committer<E>,
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    E: JubjubEngine,
 {
-    pub fn get_witnesses(&self, keys: &[K]) -> anyhow::Result<MultiProofWitnesses<K, GA>> {
+    pub fn get_witnesses(&self, keys: &[K]) -> anyhow::Result<MultiProofWitnesses<K, E>> {
         get_witnesses(&self.root, keys, &self.committer)
     }
 }
 
-pub fn get_witnesses<P, K, GA, C>(
-    node: &VerkleNode<K, LeafNodeWith32BytesValue<GA>, GA>,
+pub fn get_witnesses<P, K, E, C>(
+    node: &VerkleNode<K, LeafNodeWith32BytesValue<E>, E>,
     keys: &[K],
     committer: &C,
-) -> anyhow::Result<MultiProofWitnesses<K, GA>>
+) -> anyhow::Result<MultiProofWitnesses<K, E>>
 where
-    C: Committer<GA>,
+    C: Committer<E>,
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    E: JubjubEngine,
 {
     match node {
         VerkleNode::Leaf {
@@ -147,7 +145,7 @@ where
             let width = committer.get_domain_size();
             let value_size = 32; // The size of [u8; 32] in bytes.
             let limb_bits_size = value_size * 8 / LIMBS;
-            debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
+            debug_assert!(limb_bits_size < E::Fs::NUM_BITS as usize);
 
             let tmp_s_commitments = info
                 .s_commitments
@@ -155,11 +153,12 @@ where
                 .expect("Need to execute `compute commitment` in advance");
             let tmp_commitment = info
                 .commitment
+                .clone()
                 .expect("Need to execute `compute commitment` in advance");
 
-            let infinity_point_fs = point_to_field_element(&GA::zero())?;
+            let infinity_point_fs = point_to_field_element(&edwards::Point::<E, Unknown>::zero())?;
             let poly = {
-                let poly_0 = GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
+                let poly_0 = E::Fs::from_raw_repr(<E::Fs as PrimeField>::Repr::from(1u64))?;
                 let poly_1 = stem
                     .clone()
                     .into_field_element()
@@ -181,7 +180,7 @@ where
                     // Return an unopened stem-level node.
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
                         commitment_elements: CommitmentElements {
-                            commitments: vec![tmp_commitment, tmp_commitment],
+                            commitments: vec![tmp_commitment.clone(), tmp_commitment.clone()],
                             elements: Elements {
                                 zs: vec![0, 1],
                                 ys: vec![poly[0], poly[1]],
@@ -202,7 +201,7 @@ where
 
                 let slot = (LIMBS * suffix) % width;
 
-                let zero = GA::Scalar::zero();
+                let zero = E::Fs::zero();
                 let limb_index = suffix / limb_bits_size;
                 let suffix_slot = 2 + limb_index;
                 let mut s_poly = vec![zero; width];
@@ -230,7 +229,11 @@ where
                     debug_assert_eq!(poly[suffix_slot], infinity_point_fs);
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
                         commitment_elements: CommitmentElements {
-                            commitments: vec![tmp_commitment, tmp_commitment, tmp_commitment],
+                            commitments: vec![
+                                tmp_commitment.clone(),
+                                tmp_commitment.clone(),
+                                tmp_commitment.clone(),
+                            ],
                             elements: Elements {
                                 zs: vec![0usize, 1, suffix_slot],
                                 ys: vec![poly[0], poly[1], infinity_point_fs],
@@ -246,7 +249,7 @@ where
                     continue;
                 }
 
-                let tmp_s_commitment = tmp_s_commitments[limb_index];
+                let tmp_s_commitment = tmp_s_commitments[limb_index].clone();
 
                 if info.leaves.get(&suffix).is_none() {
                     // Proof of absence: case of a missing value.
@@ -264,9 +267,9 @@ where
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
                         commitment_elements: CommitmentElements {
                             commitments: vec![
-                                tmp_commitment,
-                                tmp_commitment,
-                                tmp_commitment,
+                                tmp_commitment.clone(),
+                                tmp_commitment.clone(),
+                                tmp_commitment.clone(),
                                 tmp_s_commitment,
                             ],
                             elements: Elements {
@@ -295,10 +298,10 @@ where
                 multi_proof_commitments.merge(&mut MultiProofWitnesses {
                     commitment_elements: CommitmentElements {
                         commitments: vec![
-                            tmp_commitment,
-                            tmp_commitment,
-                            tmp_commitment,
-                            tmp_s_commitment,
+                            tmp_commitment.clone(),
+                            tmp_commitment.clone(),
+                            tmp_commitment.clone(),
+                            tmp_s_commitment.clone(),
                             tmp_s_commitment,
                         ],
                         elements: Elements {
@@ -342,12 +345,12 @@ where
 
             // fill in the polynomial for this node
             let width = committer.get_domain_size();
-            let mut fi = vec![GA::Scalar::zero(); width];
+            let mut fi = vec![E::Fs::zero(); width];
             for (&i, child) in children.iter() {
                 fi[i] = *child.get_digest().unwrap();
             }
 
-            let commitment = *info.get_commitment().unwrap();
+            let commitment = info.get_commitment().unwrap().clone();
 
             for group in groups.clone() {
                 let zi = group[0].get_branch_at(depth);
@@ -356,7 +359,7 @@ where
                 multi_proof_commitments
                     .commitment_elements
                     .merge(&mut CommitmentElements {
-                        commitments: vec![commitment],
+                        commitments: vec![commitment.clone()],
                         elements: Elements {
                             zs: vec![zi],
                             ys: vec![yi],
@@ -442,9 +445,9 @@ impl EncodedVerkleProof {
     pub fn encode(
         verkle_proof: &VerkleProof<
             [u8; 32],
-            LeafNodeWith32BytesValue<G1Affine>,
-            G1Affine,
-            IpaConfig<G1Affine>,
+            LeafNodeWith32BytesValue<Bn256>,
+            Bn256,
+            IpaConfig<Bn256>,
         >,
     ) -> Self {
         let entries = verkle_proof
@@ -484,9 +487,9 @@ impl EncodedVerkleProof {
     pub fn decode(
         &self,
     ) -> anyhow::Result<(
-        VerkleProof<[u8; 32], LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>,
+        VerkleProof<[u8; 32], LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<Bn256>>,
         Vec<usize>,
-        Vec<Fr>,
+        Vec<<Bn256 as JubjubEngine>::Fs>,
     )> {
         let commitments = self
             .commitments
@@ -519,7 +522,7 @@ impl EncodedVerkleProof {
             .map(|((&key, &value), extra_data)| (key, value, extra_data.clone()))
             .collect::<Vec<_>>();
 
-        let rc = commitments[0];
+        let rc = commitments[0].clone();
 
         let mut cs = vec![];
         let mut zs = vec![];
@@ -547,8 +550,8 @@ impl EncodedVerkleProof {
     }
 }
 
-fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
-    cs: &mut Vec<G1Affine>,
+fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>(
+    cs: &mut Vec<edwards::Point<Bn256, Unknown>>,
     commitments: &mut I,
     entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
     depth: usize,
@@ -569,25 +572,25 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
         match first_extra_data.status {
             ExtStatus::Empty => {}
             ExtStatus::OtherStem => {
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
                 commitments.next();
             }
             ExtStatus::EmptySuffixTree => {
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
                 commitments.next();
                 commitments.next();
             }
             ExtStatus::OtherKey => {
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
                 commitments.next();
                 commitments.next();
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
             }
             ExtStatus::Present => {
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
                 commitments.next();
                 commitments.next();
-                cs.push(*commitments.next().unwrap());
+                cs.push(commitments.next().unwrap().clone());
                 for _ in 0..(LIMBS - 1) {
                     commitments.next();
                 }
@@ -613,13 +616,13 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
                     commitments.next();
                     commitments.next();
                     commitments.next();
-                    cs.push(*commitments.next().unwrap());
+                    cs.push(commitments.next().unwrap().clone());
                 }
                 ExtStatus::Present => {
                     commitments.next();
                     commitments.next();
                     commitments.next();
-                    cs.push(*commitments.next().unwrap());
+                    cs.push(commitments.next().unwrap().clone());
                     for _ in 0..(LIMBS - 1) {
                         commitments.next();
                     }
@@ -628,7 +631,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
         }
     } else {
         let cc = commitments.next().unwrap();
-        cs.push(*cc);
+        cs.push(cc.clone());
         remove_duplicates(cs, commitments, &groups[0], depth + 1)?;
         for group in groups.iter().skip(1) {
             commitments.next();
@@ -639,15 +642,16 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
     Ok(())
 }
 
-fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
-    cs: &mut Vec<G1Affine>,
+fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>(
+    cs: &mut Vec<edwards::Point<Bn256, Unknown>>,
     zs: &mut Vec<usize>,
-    ys: &mut Vec<Fr>,
+    ys: &mut Vec<<Bn256 as JubjubEngine>::Fs>,
     commitments: &mut I,
-    rc: &G1Affine,
+    rc: &edwards::Point<Bn256, Unknown>,
     entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
     depth: usize,
 ) -> anyhow::Result<()> {
+    type Fs = <Bn256 as JubjubEngine>::Fs;
     let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
 
     let (first_key, _, first_extra_data) = &entries[0];
@@ -666,62 +670,62 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
             match extra_data.status {
                 ExtStatus::Empty => {}
                 ExtStatus::OtherStem => {
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     zs.push(0);
-                    ys.push(Fr::one());
-                    cs.push(*rc);
+                    ys.push(Fs::one());
+                    cs.push(rc.clone());
                     zs.push(1);
                     ys.push(read_field_element_le(&extra_data.poa_stem.unwrap())?);
                 }
                 ExtStatus::EmptySuffixTree => {
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     zs.push(0);
-                    ys.push(Fr::one());
-                    cs.push(*rc);
+                    ys.push(Fs::one());
+                    cs.push(rc.clone());
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     zs.push(2 + limb_index);
-                    ys.push(Fr::zero());
+                    ys.push(Fs::zero());
                 }
                 ExtStatus::OtherKey => {
                     let cc = commitments.next().unwrap();
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     zs.push(0);
-                    ys.push(Fr::one());
-                    cs.push(*rc);
+                    ys.push(Fs::one());
+                    cs.push(rc.clone());
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     let slot = (LIMBS * suffix) % width;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
-                    cs.push(*cc);
+                    cs.push(cc.clone());
                     zs.push(slot);
-                    ys.push(Fr::zero());
+                    ys.push(Fs::zero());
                 }
                 ExtStatus::Present => {
                     let cc = commitments.next().unwrap();
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     zs.push(0);
-                    ys.push(Fr::one());
-                    cs.push(*rc);
+                    ys.push(Fs::one());
+                    cs.push(rc.clone());
                     zs.push(1);
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
-                    cs.push(*rc);
+                    cs.push(rc.clone());
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     let slot = (LIMBS * suffix) % width;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
-                    let mut tmp_leaves = [Fr::zero(); LIMBS];
+                    let mut tmp_leaves = [Fs::zero(); LIMBS];
                     leaf_to_commitments(&mut tmp_leaves, (*value).unwrap())?;
                     for i in 0..LIMBS {
-                        cs.push(*cc);
+                        cs.push(cc.clone());
                         zs.push(slot + i);
                         ys.push(tmp_leaves[i]);
                     }
@@ -733,9 +737,9 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
             let (key, _, extra_data) = &group[0];
             let zi = key.get_branch_at(depth);
             zs.push(zi);
-            cs.push(*rc);
+            cs.push(rc.clone());
             if extra_data.depth == depth + 1 && extra_data.status == ExtStatus::Empty {
-                let yi = Fr::zero();
+                let yi = Fs::zero();
                 ys.push(yi);
             } else {
                 let cc = commitments.next().unwrap();
@@ -798,14 +802,14 @@ pub struct EncodedBatchProof {
 }
 
 impl EncodedBatchProof {
-    pub fn encode(batch_proof: &BatchProof<G1Affine>) -> Self {
+    pub fn encode(batch_proof: &BatchProof<Bn256>) -> Self {
         Self {
             ipa: EncodedIpaProof::encode(&batch_proof.ipa),
             d: EncodedEcPoint::encode(&batch_proof.d),
         }
     }
 
-    pub fn decode(&self) -> anyhow::Result<BatchProof<G1Affine>> {
+    pub fn decode(&self) -> anyhow::Result<BatchProof<Bn256>> {
         Ok(BatchProof {
             ipa: self.ipa.decode()?,
             d: self.d.decode()?,
@@ -821,7 +825,7 @@ pub struct EncodedElements {
 }
 
 impl EncodedElements {
-    pub fn encode(elements: &Elements<Fr>) -> Self {
+    pub fn encode(elements: &Elements<<Bn256 as JubjubEngine>::Fs>) -> Self {
         Self {
             zs: elements.zs.iter().map(|&zi| zi as u8).collect::<Vec<_>>(),
             ys: elements
@@ -841,7 +845,7 @@ impl EncodedElements {
         }
     }
 
-    pub fn decode(&self) -> anyhow::Result<Elements<Fr>> {
+    pub fn decode(&self) -> anyhow::Result<Elements<<Bn256 as JubjubEngine>::Fs>> {
         Ok(Elements {
             zs: self.zs.iter().map(|&zi| zi as usize).collect::<Vec<_>>(),
             ys: self
@@ -869,7 +873,7 @@ pub struct EncodedCommitmentElements {
 }
 
 impl EncodedCommitmentElements {
-    pub fn encode(elements: &CommitmentElements<G1Affine>) -> Self {
+    pub fn encode(elements: &CommitmentElements<Bn256>) -> Self {
         Self {
             commitments: elements
                 .commitments
@@ -880,7 +884,7 @@ impl EncodedCommitmentElements {
         }
     }
 
-    pub fn decode(&self) -> anyhow::Result<CommitmentElements<G1Affine>> {
+    pub fn decode(&self) -> anyhow::Result<CommitmentElements<Bn256>> {
         Ok(CommitmentElements {
             commitments: self
                 .commitments
@@ -900,7 +904,7 @@ pub struct EncodedIpaProof {
 }
 
 impl EncodedIpaProof {
-    pub fn encode(ipa_proof: &IpaProof<G1Affine>) -> Self {
+    pub fn encode(ipa_proof: &IpaProof<Bn256>) -> Self {
         Self {
             l: ipa_proof
                 .l
@@ -916,7 +920,7 @@ impl EncodedIpaProof {
         }
     }
 
-    pub fn decode(&self) -> anyhow::Result<IpaProof<G1Affine>> {
+    pub fn decode(&self) -> anyhow::Result<IpaProof<Bn256>> {
         Ok(IpaProof {
             l: self
                 .l
@@ -937,91 +941,38 @@ impl EncodedIpaProof {
 pub struct EncodedEcPoint(pub Encoded32Bytes);
 
 impl EncodedEcPoint {
-    pub fn encode(point: &G1Affine) -> Self {
-        let encoded = point.into_compressed();
+    pub fn encode(point: &edwards::Point<Bn256, Unknown>) -> Self {
+        let (x, y) = point.into_xy();
+        let encoded = write_field_element_le(&y);
         let mut raw = [0u8; 32];
-        for (i, v) in encoded.as_ref().iter().enumerate() {
+        for (i, v) in encoded.iter().enumerate() {
             raw[i] = *v;
+        }
+
+        if x.into_repr().is_odd() {
+            raw[31] |= 0x80;
         }
 
         Self(Encoded32Bytes::encode(&raw))
     }
 
-    pub fn decode(&self) -> anyhow::Result<G1Affine> {
-        let raw = self.0.decode()?;
-        let result = into_affine_unchecked(raw)?;
+    pub fn decode(&self) -> anyhow::Result<edwards::Point<Bn256, Unknown>> {
+        let jubjub_params = &JubjubBn256::new();
+        let mut raw = self.0.decode()?;
+        let sign = (raw[31] >> 7) == 1;
+        raw[31] &= 0x7F;
+        let y = read_field_element_le(&raw)?;
+        let result = edwards::Point::get_for_y(y, sign, jubjub_params).unwrap();
 
         Ok(result)
     }
-}
-
-fn into_affine_unchecked(bytes: [u8; 32]) -> Result<G1Affine, GroupDecodingError> {
-    // Create a copy of this representation.
-    let mut copy = bytes;
-
-    if copy[0] & (1 << 6) != 0 {
-        // This is the point at infinity, which means that if we mask away
-        // the first two bits, the entire representation should consist
-        // of zeroes.
-        copy[0] &= 0x3f;
-
-        if copy.iter().all(|b| *b == 0) {
-            Ok(G1Affine::zero())
-        } else {
-            Err(GroupDecodingError::UnexpectedInformation)
-        }
-    } else {
-        // Determine if the intended y coordinate must be greater
-        // lexicographically.
-        let greatest = copy[0] & (1 << 7) != 0;
-
-        // Unset the two most significant bits.
-        copy[0] &= 0x3f;
-
-        let mut x = <Fq as PrimeField>::Repr::default();
-
-        {
-            let mut reader = &copy[..];
-
-            x.read_be(&mut reader).unwrap();
-        }
-
-        // Interpret as Fq element.
-        let x = Fq::from_repr(x)
-            .map_err(|e| GroupDecodingError::CoordinateDecodingError("x coordinate", e))?;
-
-        get_point_from_x(x, greatest).ok_or(GroupDecodingError::NotOnCurve)
-    }
-}
-
-fn get_point_from_x(x: Fq, greatest: bool) -> Option<G1Affine> {
-    // let mut b_repr = <Fq as PrimeField>::Repr::default();
-    // b_repr.0[0] = 0x7a17caa950ad28d7;
-    // b_repr.0[1] = 0x1f6ac17ae15521b9;
-    // b_repr.0[2] = 0x334bea4e696bd284;
-    // b_repr.0[3] = 0x2a1f6744ce179d8e;
-    // let b = Fq::from_repr(b_repr).unwrap();
-    let b = G1Affine::b_coeff();
-
-    // Compute x^3 + b
-    let mut x3b = x;
-    x3b.square();
-    x3b.mul_assign(&x);
-    x3b.add_assign(&b);
-
-    x3b.sqrt().map(|y| {
-        let mut negy = y;
-        negy.negate();
-
-        G1Affine::from_xy_unchecked(x, if (y < negy) ^ greatest { y } else { negy })
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncodedScalar(pub Encoded32Bytes);
 
 impl EncodedScalar {
-    pub fn encode(scalar: &Fr) -> Self {
+    pub fn encode(scalar: &<Bn256 as JubjubEngine>::Fs) -> Self {
         let encoded = write_field_element_le(scalar);
         let mut raw = [0u8; 32];
         for (i, v) in encoded.iter().enumerate() {
@@ -1031,9 +982,9 @@ impl EncodedScalar {
         Self(Encoded32Bytes::encode(&raw))
     }
 
-    pub fn decode(&self) -> anyhow::Result<Fr> {
+    pub fn decode(&self) -> anyhow::Result<<Bn256 as JubjubEngine>::Fs> {
         let raw = self.0.decode()?;
-        read_field_element_le::<Fr>(&raw)
+        read_field_element_le::<<Bn256 as JubjubEngine>::Fs>(&raw)
     }
 }
 

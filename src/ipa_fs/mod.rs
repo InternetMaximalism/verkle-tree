@@ -3,10 +3,10 @@ pub mod proof;
 pub mod transcript;
 pub mod utils;
 
-use franklin_crypto::babyjubjub::fs::{Fs, FsRepr};
-use franklin_crypto::babyjubjub::{edwards, JubjubBn256, JubjubEngine, Unknown};
-use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr, FrRepr};
-use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
+use franklin_crypto::babyjubjub::fs::Fs;
+use franklin_crypto::babyjubjub::{edwards, JubjubEngine, Unknown};
+use franklin_crypto::bellman::pairing::bn256::{Bn256, Fr};
+use franklin_crypto::bellman::{Field, PrimeField};
 
 use crate::ipa_fr::utils::log2_ceil;
 use crate::ipa_fs::config::Committer;
@@ -27,7 +27,7 @@ mod tests {
     use super::config::{Committer, IpaConfig};
     use super::proof::IpaProof;
     use super::transcript::{Bn256Transcript, PoseidonBn256Transcript};
-    use super::utils::{inner_prod, read_field_element_le};
+    use super::utils::read_field_element_le;
 
     #[test]
     fn test_ipa_fs_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,7 +38,7 @@ mod tests {
 
         // Prover view
         let poly = test_poly::<Fs>(&[12, 97, 37, 0, 1, 208, 132, 3], domain_size);
-        let prover_commitment = ipa_conf.commit(&poly, jubjub_params).unwrap();
+        let prover_commitment = ipa_conf.commit(&poly).unwrap();
 
         let prover_transcript = PoseidonBn256Transcript::with_bytes(b"ipa");
 
@@ -96,9 +96,6 @@ impl IpaProof<Bn256> {
             "compute barycentric coefficients of eval_point: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
         );
-        for bi in b.iter() {
-            dbg!(bi.into_repr());
-        }
         if b.len() != ipa_conf.srs.len() {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }

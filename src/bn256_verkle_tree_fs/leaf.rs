@@ -1,40 +1,38 @@
-use core::fmt::Debug;
-use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
+use franklin_crypto::babyjubjub::{edwards, JubjubEngine, Unknown};
+use franklin_crypto::bellman::{Field, PrimeField};
 use std::collections::HashMap;
 
-use crate::ipa_fr::config::Committer;
-use crate::verkle_tree::trie::{
-    AbstractKey, AbstractPath, AbstractStem, AbstractValue, IntoFieldElement, LeafNodeValue,
-    NodeValue,
-};
-use crate::verkle_tree::utils::{fill_leaf_tree_poly, point_to_field_element};
+use crate::ipa_fs::config::Committer;
+use crate::verkle_tree::trie::{AbstractKey, AbstractPath, AbstractStem, IntoFieldElement};
+use crate::verkle_tree_fs::trie::{LeafNodeValue, NodeValue};
+use crate::verkle_tree_fs::utils::{fill_leaf_tree_poly, point_to_field_element};
 
 pub(crate) const LIMBS: usize = 2;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LeafNodeWith32BytesValue<GA>
+#[derive(Clone, PartialEq)]
+pub struct LeafNodeWith32BytesValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     /// The number of leaves which are `Some` rather than `None`.
     pub(crate) num_nonempty_children: usize,
 
     pub(crate) leaves: HashMap<usize, [u8; 32]>, // HashMap<u8, V>
 
-    pub(crate) s_commitments: Option<Vec<GA>>, // Option<[GA; 2]>
+    pub(crate) s_commitments: Option<Vec<edwards::Point<E, Unknown>>>, // Option<[GA; 2]>
 
     /// The commitment of this node.
     /// If it has not computed yet, `commitment` set `None`.
-    pub(crate) commitment: Option<GA>,
+    pub(crate) commitment: Option<edwards::Point<E, Unknown>>,
 
     /// The digest of `commitment`.
     /// If it has not computed yet, `digest` set `None`.
-    pub(crate) digest: Option<GA::Scalar>,
+    pub(crate) digest: Option<E::Fs>,
 }
 
-impl<GA> Default for LeafNodeWith32BytesValue<GA>
+impl<E> Default for LeafNodeWith32BytesValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     fn default() -> Self {
         Self {
@@ -47,56 +45,52 @@ where
     }
 }
 
-impl<GA> NodeValue<GA> for LeafNodeWith32BytesValue<GA>
+impl<E> NodeValue<E> for LeafNodeWith32BytesValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     fn len(&self) -> usize {
         self.num_nonempty_children
     }
 
-    fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar> {
+    fn get_digest_mut(&mut self) -> &mut Option<E::Fs> {
         &mut self.digest
     }
 
-    fn get_digest(&self) -> Option<&GA::Scalar> {
+    fn get_digest(&self) -> Option<&E::Fs> {
         (&self.digest).into()
     }
 }
 
-impl<GA> LeafNodeWith32BytesValue<GA>
+impl<E> LeafNodeWith32BytesValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
-    pub fn get_commitment_mut(&mut self) -> &mut Option<GA> {
+    pub fn get_commitment_mut(&mut self) -> &mut Option<edwards::Point<E, Unknown>> {
         &mut self.commitment
     }
 
-    pub fn get_commitment(&self) -> Option<&GA> {
+    pub fn get_commitment(&self) -> Option<&edwards::Point<E, Unknown>> {
         (&self.commitment).into()
     }
 }
 
-// 32 bytes value
-impl AbstractValue for [u8; 32] {}
-
-pub fn compute_commitment_of_leaf_node<K, GA, C>(
+pub fn compute_commitment_of_leaf_node<K, E, C>(
     committer: &C,
     stem: &mut K::Stem,
-    info: &mut LeafNodeWith32BytesValue<GA>,
-) -> anyhow::Result<GA::Scalar>
+    info: &mut LeafNodeWith32BytesValue<E>,
+) -> anyhow::Result<E::Fs>
 where
     K: AbstractKey,
-    K::Stem: IntoFieldElement<GA::Scalar>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
-    C: Committer<GA>,
+    K::Stem: IntoFieldElement<E::Fs>,
+    E: JubjubEngine,
+    C: Committer<E>,
 {
     let value_size = 32;
     let limb_bits_size = value_size * 8 / LIMBS;
-    debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
+    debug_assert!(limb_bits_size < E::Fs::NUM_BITS as usize);
 
-    let poly_0 = GA::Scalar::from_repr(<GA::Scalar as PrimeField>::Repr::from(1u64))?;
+    let poly_0 = E::Fs::from_raw_repr(<E::Fs as PrimeField>::Repr::from(1u64))?;
     let poly_1 = stem
         .clone()
         .into_field_element()
@@ -110,16 +104,16 @@ where
     }
     let mut s_commitments = vec![];
     for limb in leaves_array.chunks(limb_bits_size) {
-        let mut sub_poly = vec![GA::Scalar::zero(); width];
+        let mut sub_poly = vec![E::Fs::zero(); width];
         let _count = fill_leaf_tree_poly(&mut sub_poly, limb)?;
         let tmp_s_commitment = committer
             .commit(&sub_poly)
             .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
-        s_commitments.push(tmp_s_commitment);
         poly.push(point_to_field_element(&tmp_s_commitment)?);
+        s_commitments.push(tmp_s_commitment);
     }
 
-    let infinity_point_fs = point_to_field_element(&GA::zero())?;
+    let infinity_point_fs = point_to_field_element(&edwards::Point::<E, Unknown>::zero())?;
     poly.resize(width, infinity_point_fs);
 
     let tmp_commitment = committer
@@ -135,13 +129,12 @@ where
     Ok(tmp_digest)
 }
 
-impl<P, K, GA> LeafNodeValue<K, GA> for LeafNodeWith32BytesValue<GA>
+impl<P, K, E> LeafNodeValue<K, E> for LeafNodeWith32BytesValue<E>
 where
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    E: JubjubEngine,
 {
     type Value = [u8; 32];
 
@@ -175,11 +168,11 @@ where
         old_leaf
     }
 
-    fn compute_digest<C: Committer<GA>>(
+    fn compute_digest<C: Committer<E>>(
         &mut self,
         stem: &mut K::Stem,
         committer: &C,
-    ) -> anyhow::Result<GA::Scalar> {
+    ) -> anyhow::Result<E::Fs> {
         compute_commitment_of_leaf_node::<K, _, _>(committer, stem, self)
     }
 }

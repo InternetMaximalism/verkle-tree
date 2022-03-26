@@ -9,14 +9,15 @@ pub const NUM_IPA_ROUNDS: usize = 8; // log_2(common.POLY_DEGREE);
 pub const DOMAIN_SIZE: usize = 256; // common.POLY_DEGREE;
 
 #[derive(Clone)]
-pub struct IpaConfig<E: JubjubEngine> {
+pub struct IpaConfig<'a, E: JubjubEngine> {
     pub srs: Vec<edwards::Point<E, Unknown>>,
     pub q: edwards::Point<E, Unknown>,
     pub precomputed_weights: PrecomputedWeights<E::Fs>,
+    pub jubjub_params: &'a E::Params,
 }
 
-impl<E: JubjubEngine> IpaConfig<E> {
-    pub fn new(domain_size: usize, jubjub_params: &E::Params) -> Self {
+impl<'a, E: JubjubEngine> IpaConfig<'a, E> {
+    pub fn new(domain_size: usize, jubjub_params: &'a E::Params) -> Self {
         let start = std::time::Instant::now();
         let srs = generate_random_points(domain_size, jubjub_params).unwrap();
         println!("srs: {} s", start.elapsed().as_micros() as f64 / 1000000.0);
@@ -31,6 +32,7 @@ impl<E: JubjubEngine> IpaConfig<E> {
             srs,
             q,
             precomputed_weights,
+            jubjub_params,
         }
     }
 
@@ -52,27 +54,19 @@ pub trait Committer<E: JubjubEngine> {
 
     fn get_domain_size(&self) -> usize;
 
-    fn commit(
-        &self,
-        polynomial: &[E::Fs],
-        jubjub_params: &E::Params,
-    ) -> Result<edwards::Point<E, Unknown>, Self::Err>;
+    fn commit(&self, polynomial: &[E::Fs]) -> Result<edwards::Point<E, Unknown>, Self::Err>;
 }
 
-impl<E: JubjubEngine> Committer<E> for IpaConfig<E> {
+impl<'a, E: JubjubEngine> Committer<E> for IpaConfig<'a, E> {
     type Err = anyhow::Error;
 
     fn get_domain_size(&self) -> usize {
         self.precomputed_weights.get_domain_size()
     }
 
-    fn commit(
-        &self,
-        polynomial: &[E::Fs],
-        jubjub_params: &E::Params,
-    ) -> anyhow::Result<edwards::Point<E, Unknown>> {
+    fn commit(&self, polynomial: &[E::Fs]) -> anyhow::Result<edwards::Point<E, Unknown>> {
         let basis = &self.srs;
-        let result = commit(basis, polynomial, jubjub_params)?;
+        let result = commit(basis, polynomial, self.jubjub_params)?;
 
         Ok(result)
     }

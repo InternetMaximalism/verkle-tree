@@ -27,12 +27,12 @@ pub struct PoseidonBn256Transcript {
 #[test]
 fn test_fs_poseidon_hash() {
     let constants = PoseidonConstants::new();
-    let mut preimage = vec![<Bn256Fs as ff::Field>::zero(); 2];
-    let input1: Fs = read_field_element_le(&[1]).unwrap();
-    let input2: Fs = read_field_element_le(&[2]).unwrap();
+    let mut preimage = vec![<Bn256Fr as ff::Field>::zero(); 2];
+    let input1: Fr = read_field_element_le(&[1]).unwrap();
+    let input2: Fr = read_field_element_le(&[2]).unwrap();
     preimage[0] = convert_ff_ce_to_ff(input1).unwrap();
     preimage[1] = convert_ff_ce_to_ff(input2).unwrap();
-    let mut h = Poseidon::<Bn256Fs, typenum::U2>::new_with_preimage(&preimage, &constants);
+    let mut h = Poseidon::<Bn256Fr, typenum::U2>::new_with_preimage(&preimage, &constants);
     let output = h.hash();
     println!("output: {:?}", output);
 }
@@ -125,15 +125,15 @@ pub fn to_bytes_le<F: ff::PrimeField>(scalar: &F) -> Vec<u8> {
 }
 
 #[test]
-fn test_read_write_ff_ce() {
+fn test_read_write_ff_ce_fs() {
     let bytes = [
         206u8, 104, 6, 65, 140, 79, 39, 170, 187, 254, 154, 245, 57, 39, 73, 145, 82, 144, 26, 62,
         229, 65, 168, 197, 168, 198, 162, 203, 73, 241, 49, 5,
     ];
-    let point = from_bytes_le::<Bn256Fs>(&bytes).unwrap();
+    let point = from_bytes_le::<Bn256Fr>(&bytes).unwrap();
     assert_eq!(
         format!("{:?}", point),
-        "Bn256Fs(0x0531f149cba2c6a8c5a841e53e1a905291492739f59afebbaa274f8c410668ce)"
+        "Bn256Fr(0x0531f149cba2c6a8c5a841e53e1a905291492739f59afebbaa274f8c410668ce)"
     );
 
     let recovered_bytes = to_bytes_le(&point);

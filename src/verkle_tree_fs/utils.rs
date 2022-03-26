@@ -1,25 +1,28 @@
-use franklin_crypto::bellman::{CurveAffine, PrimeField};
+use franklin_crypto::{
+    babyjubjub::{edwards, JubjubEngine, Unknown},
+    bellman::PrimeField,
+};
 
-use crate::ipa_fr::utils::{read_field_element_le, write_field_element_le};
+use crate::ipa_fs::utils::{read_field_element_le, write_field_element_le};
 
-pub fn point_to_field_element<GA: CurveAffine>(point: &GA) -> anyhow::Result<GA::Scalar>
-where
-    GA::Base: PrimeField,
-{
-    let (_point_x, point_y) = point.into_xy_unchecked();
+pub fn point_to_field_element<E: JubjubEngine>(
+    point: &edwards::Point<E, Unknown>,
+) -> anyhow::Result<E::Fs> {
+    let (_point_x, point_y) = point.into_xy();
     let mut point_bytes = write_field_element_le(&point_y);
     // let mut point_bytes_x = write_field_element_le(&_point_x);
     // point_bytes.append(&mut point_bytes_x);
 
-    // let num_bits_rest = GA::Scalar::NUM_BITS - 248;
+    // let num_bits_rest = E::Fs::NUM_BITS - 248;
     // let mask = (1 << (num_bits_rest - 1)) - 1;
-    let mask = 0b00011111;
+    let mask = 0b00000011;
     point_bytes[31] &= mask;
     let result = read_field_element_le(&point_bytes)?;
 
     Ok(result)
 }
 
+// This function returns the number of non-empty leaves.
 pub fn fill_leaf_tree_poly<F: PrimeField>(
     dest: &mut [F],
     src: &[Option<[u8; 32]>],
