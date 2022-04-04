@@ -109,13 +109,21 @@ pub fn convert_fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs>
 
 pub fn convert_fs_to_fr<E: JubjubEngine>(value: &E::Fs) -> anyhow::Result<E::Fr> {
     let raw_value = value.into_repr();
+    let raw_result = convert_fs_repr_to_fr_repr::<E>(&raw_value)?;
+    let result = E::Fr::from_repr(raw_result)?;
+
+    Ok(result)
+}
+
+pub fn convert_fs_repr_to_fr_repr<E: JubjubEngine>(
+    raw_value: &<E::Fs as PrimeField>::Repr,
+) -> anyhow::Result<<E::Fr as PrimeField>::Repr> {
     let mut raw_result = <E::Fr as PrimeField>::Repr::default();
     for (r, &v) in raw_result.as_mut().iter_mut().zip(raw_value.as_ref()) {
         let _ = std::mem::replace(r, v);
     }
-    let result = E::Fr::from_repr(raw_result)?;
 
-    Ok(result)
+    Ok(raw_result)
 }
 
 #[test]
