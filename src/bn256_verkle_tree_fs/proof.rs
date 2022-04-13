@@ -127,14 +127,12 @@ where
         ipa_conf: &IpaConfig<Bn256>,
     ) -> anyhow::Result<bool> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        let jubjub_params = &JubjubBn256::new();
         self.multi_proof.check(
             &self.commitments.clone(),
             ys,
             zs,
             transcript.into_params(),
             ipa_conf,
-            jubjub_params,
         )
     }
 }

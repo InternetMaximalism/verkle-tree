@@ -71,7 +71,6 @@ mod tests {
             &zs,
             verifier_transcript.into_params(),
             ipa_conf,
-            jubjub_params,
         )?;
 
         assert!(success, "inner product proof failed");
@@ -208,9 +207,9 @@ impl BatchProof<Bn256> {
         zs: &[usize],
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
-        jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<bool> {
         let proof = self;
+        let jubjub_params = ipa_conf.jubjub_params;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         if commitments.len() != ys.len() {
