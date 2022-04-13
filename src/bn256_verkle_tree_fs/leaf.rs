@@ -58,7 +58,9 @@ where
     }
 
     fn get_digest(&self) -> Option<&E::Fs> {
-        (&self.digest).into()
+        let digest = &self.digest;
+
+        digest.into()
     }
 }
 
@@ -71,7 +73,9 @@ where
     }
 
     pub fn get_commitment(&self) -> Option<&edwards::Point<E, Unknown>> {
-        (&self.commitment).into()
+        let commitment = &self.commitment;
+
+        commitment.into()
     }
 }
 
@@ -90,7 +94,7 @@ where
     let limb_bits_size = value_size * 8 / LIMBS;
     debug_assert!(limb_bits_size < E::Fs::NUM_BITS as usize);
 
-    let poly_0 = E::Fs::from_raw_repr(<E::Fs as PrimeField>::Repr::from(1u64))?;
+    let poly_0 = E::Fs::one();
     let poly_1 = stem
         .clone()
         .into_field_element()
@@ -113,8 +117,8 @@ where
         s_commitments.push(tmp_s_commitment);
     }
 
-    let infinity_point_fs = point_to_field_element(&edwards::Point::<E, Unknown>::zero())?;
-    poly.resize(width, infinity_point_fs);
+    // let infinity_point_fs = point_to_field_element(&edwards::Point::<E, Unknown>::zero())?;
+    poly.resize(width, E::Fs::zero());
 
     let tmp_commitment = committer
         .commit(&poly)

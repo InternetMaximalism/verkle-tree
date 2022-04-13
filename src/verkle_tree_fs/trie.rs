@@ -11,7 +11,7 @@ use crate::verkle_tree::trie::{
 use super::utils::point_to_field_element;
 
 #[derive(PartialEq)]
-pub struct VerkleTree<K, L, E, C>
+pub struct VerkleTree<'a, K, L, E, C>
 where
     K: AbstractKey,
     L: LeafNodeValue<K, E>,
@@ -19,7 +19,7 @@ where
     C: Committer<E>,
 {
     pub root: VerkleNode<K, L, E>,
-    pub(crate) committer: C,
+    pub(crate) committer: &'a C,
 }
 
 // impl<K, L, GA> Default for VerkleTree<K, L, GA>
@@ -37,14 +37,14 @@ where
 //     }
 // }
 
-impl<K, L, E, C> VerkleTree<K, L, E, C>
+impl<'a, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
     C: Committer<E>,
     K: AbstractKey,
     L: LeafNodeValue<K, E>,
     E: JubjubEngine,
 {
-    pub fn new(committer: C) -> Self {
+    pub fn new(committer: &'a C) -> Self {
         Self {
             root: VerkleNode::default(),
             committer,
@@ -56,7 +56,7 @@ where
     }
 }
 
-impl<P, K, L, E, C> VerkleTree<K, L, E, C>
+impl<'a, P, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
     C: Committer<E>,
     P: Default + AbstractPath,
@@ -97,7 +97,7 @@ where
 //     fn compute_digest(&mut self) -> Result<Self::Digest, Self::Err>;
 // }
 
-impl<P, K, L, E, C> VerkleTree<K, L, E, C>
+impl<'a, P, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
     C: Committer<E>,
     P: Default + AbstractPath,
@@ -108,7 +108,7 @@ where
 {
     /// Computes the digest of given Verkle tree.
     pub fn compute_digest(&mut self) -> anyhow::Result<E::Fs> {
-        self.root.compute_digest(&self.committer)
+        self.root.compute_digest(self.committer)
     }
 }
 
@@ -193,7 +193,9 @@ where
     }
 
     fn get_digest(&self) -> Option<&E::Fs> {
-        (&self.digest).into()
+        let digest = &self.digest;
+
+        digest.into()
     }
 }
 
@@ -206,7 +208,9 @@ where
     }
 
     pub fn get_commitment(&self) -> Option<&edwards::Point<E, Unknown>> {
-        (&self.commitment).into()
+        let commitment = &self.commitment;
+
+        commitment.into()
     }
 }
 
@@ -253,7 +257,7 @@ where
     ) -> Self {
         let num_nonempty_children = children.len();
         Self::Internal {
-            path: path.clone(),
+            path,
             children,
             info: InternalNodeValue {
                 num_nonempty_children,

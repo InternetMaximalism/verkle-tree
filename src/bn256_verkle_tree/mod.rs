@@ -348,7 +348,9 @@ mod bn256_verkle_tree_tests {
         sorted_keys.sort();
         let (proof, elements) = VerkleProof::create(&mut tree, &sorted_keys).unwrap();
         let encoded_proof = EncodedVerkleProof::encode(&proof);
-        let proof_path = Path::new("./test_cases").join("proof_case2.json");
+        let proof_path = Path::new("./test_cases")
+            .join("fr_case1")
+            .join("proof.json");
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -356,7 +358,9 @@ mod bn256_verkle_tree_tests {
             .open(proof_path)
             .unwrap();
         serde_json::to_writer(file, &encoded_proof).unwrap();
-        let elements_path = Path::new("./test_cases").join("elements_case2.json");
+        let elements_path = Path::new("./test_cases")
+            .join("fr_case1")
+            .join("elements.json");
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -373,11 +377,15 @@ mod bn256_verkle_tree_tests {
         )
         .unwrap();
 
-        let proof_path = Path::new("./test_cases").join("proof_case2.json");
+        let proof_path = Path::new("./test_cases")
+            .join("fr_case1")
+            .join("proof.json");
         let file = OpenOptions::new().read(true).open(proof_path).unwrap();
         let encoded_proof: EncodedVerkleProof = serde_json::from_reader(file).unwrap();
         let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode().unwrap();
-        let elements_path = Path::new("./test_cases").join("elements_case2.json");
+        let elements_path = Path::new("./test_cases")
+            .join("fr_case1")
+            .join("elements.json");
         let file = OpenOptions::new().read(true).open(elements_path).unwrap();
         let commitment_elements: EncodedCommitmentElements = serde_json::from_reader(file).unwrap();
         let commitment_elements = commitment_elements.decode().unwrap();
@@ -387,12 +395,12 @@ mod bn256_verkle_tree_tests {
             decoded_proof
                 .commitments
                 .iter()
-                .map(|v| EncodedEcPoint::encode(v))
+                .map(EncodedEcPoint::encode)
                 .collect::<Vec<_>>(),
             commitment_elements
                 .commitments
                 .iter()
-                .map(|v| EncodedEcPoint::encode(v))
+                .map(EncodedEcPoint::encode)
                 .collect::<Vec<_>>()
         );
 
@@ -402,9 +410,6 @@ mod bn256_verkle_tree_tests {
             .check(&decoded_zs, &decoded_ys, &committer)
             .unwrap();
 
-        assert!(
-            success,
-            "Fail to pass the verification of verkle proof circuit."
-        );
+        assert!(success, "Fail to pass the verification of verkle proof.");
     }
 }

@@ -102,7 +102,7 @@ impl IpaProof<G1Affine> {
             .map(|x| x.into_projective())
             .collect::<Vec<_>>();
         if cfg!(debug_assertions) {
-            assert!(commitment.eq(&ipa_conf.commit(&lagrange_poly).unwrap()));
+            assert!(commitment.eq(&ipa_conf.commit(lagrange_poly).unwrap()));
         }
 
         let mut a = lagrange_poly.to_vec();
@@ -121,7 +121,7 @@ impl IpaProof<G1Affine> {
         let ip = inner_prod(&a, &b)?;
 
         let start = std::time::Instant::now();
-        transcript.commit_point(&commitment, &rns_params)?; // C
+        transcript.commit_point(&commitment, rns_params)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
         let w = transcript.get_challenge(); // w
@@ -173,8 +173,8 @@ impl IpaProof<G1Affine> {
             rs.push(c_r);
 
             let start = std::time::Instant::now();
-            transcript.commit_point(&c_l, &rns_params)?; // L
-            transcript.commit_point(&c_r, &rns_params)?; // R
+            transcript.commit_point(&c_l, rns_params)?; // L
+            transcript.commit_point(&c_r, rns_params)?; // R
             println!(
                 "update transcript: {} s",
                 start.elapsed().as_micros() as f64 / 1000000.0
@@ -244,7 +244,7 @@ impl IpaProof<G1Affine> {
             anyhow::bail!("`barycentric_coefficients` had incorrect length");
         }
 
-        transcript.commit_point(&commitment, &rns_params)?; // C
+        transcript.commit_point(&commitment, rns_params)?; // C
         transcript.commit_field_element(&eval_point)?; // input point
         transcript.commit_field_element(&ip)?; // output point
 
@@ -258,7 +258,7 @@ impl IpaProof<G1Affine> {
         let mut result_c = commitment.into_projective();
         result_c.add_assign(&qy);
 
-        let challenges = generate_challenges(&proof, rns_params, &mut transcript).unwrap();
+        let challenges = generate_challenges(proof, rns_params, &mut transcript).unwrap();
 
         let mut challenges_inv: Vec<Fr> = Vec::with_capacity(challenges.len());
 

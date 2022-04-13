@@ -1,3 +1,2 @@
 /target
-/test_cases/*
-!/test_cases/.gitkeep
+/test_cases/*/elements.json

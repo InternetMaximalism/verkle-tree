@@ -48,7 +48,6 @@ mod tests {
             point,
             prover_transcript.into_params(),
             ipa_conf,
-            jubjub_params,
         )?;
 
         // test_serialize_deserialize_proof(proof);
@@ -64,7 +63,6 @@ mod tests {
                 inner_product,
                 verifier_transcript.into_params(),
                 ipa_conf,
-                jubjub_params,
             )
             .unwrap();
         assert!(success, "inner product proof failed");
@@ -80,8 +78,8 @@ impl IpaProof<Bn256> {
         eval_point: Fs,
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
-        jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<(Self, <Bn256 as JubjubEngine>::Fs)> {
+        let jubjub_params = ipa_conf.jubjub_params;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
         let mut current_basis = ipa_conf.srs.clone();
         // let _commitment = commit(&current_basis.clone(), lagrange_poly, jubjub_params)?;
@@ -203,11 +201,11 @@ impl IpaProof<Bn256> {
         ip: Fs, // inner_prod
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
-        jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<bool> {
         dbg!(transcript_params);
 
         let proof = self;
+        let jubjub_params = ipa_conf.jubjub_params;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         // println!("{:?}", proof);
@@ -247,7 +245,7 @@ impl IpaProof<Bn256> {
         let mut result_c = commitment.add(&qy, jubjub_params);
         dbg!(result_c.into_xy());
 
-        let challenges = generate_challenges(&proof, &mut transcript).unwrap();
+        let challenges = generate_challenges(proof, &mut transcript).unwrap();
 
         let mut challenges_inv: Vec<Fs> = Vec::with_capacity(challenges.len());
 
@@ -269,7 +267,6 @@ impl IpaProof<Bn256> {
             result_c = result_c
                 .add(&result_c_l, jubjub_params)
                 .add(&result_c_r, jubjub_params);
-            // result_c = commit(&[result_c, l, r], &[Fs::one(), *x, x_inv], jubjub_params)?;
             dbg!(result_c.into_xy());
         }
 
@@ -321,7 +318,7 @@ impl IpaProof<Bn256> {
         let result1 = current_basis[0].mul(proof.a, jubjub_params); // result1 = a[0] * G[0]
         dbg!(result1.into_xy());
         let mut part_2a = b[0]; // part_2a = b[0]
-        dbg!(part_2a.into_repr());
+        dbg!(proof.a.into_repr());
         part_2a.mul_assign(&proof.a); // part_2a = a[0] * b[0]
         dbg!(part_2a.into_repr());
         let result2 = qw.mul(part_2a, jubjub_params); // result2 = a[0] * b[0] * w * Q

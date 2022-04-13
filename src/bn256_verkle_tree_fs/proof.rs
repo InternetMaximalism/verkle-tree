@@ -53,7 +53,6 @@ where
         keys: &[K],
     ) -> anyhow::Result<(Self, Elements<<Bn256 as JubjubEngine>::Fs>)> {
         let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
-        let jubjub_params = &JubjubBn256::new();
         tree.compute_digest()?;
 
         let MultiProofWitnesses {
@@ -69,17 +68,45 @@ where
         let mut values: Vec<Option<[u8; 32]>> = vec![];
         for k in keys {
             let val = tree.get(k);
-            values.push(val.map(|v| *v));
+            // values.push(val.map(|v| *v));
+            values.push(val.copied());
         }
 
-        let (multi_proof, _) = BatchProof::<Bn256>::create(
+        // let _commitments = elements
+        //     .fs
+        //     .iter()
+        //     .map(|poly| tree.committer.commit(&poly))
+        //     .collect::<Result<Vec<_>, _>>()?;
+        // for (i, (_c, c)) in _commitments.iter().zip(commitments).enumerate() {
+        //     if !c.eq(_c) {
+        //         println!(
+        //             "{}-th commitment is invalid: {:?} != {:?}",
+        //             i,
+        //             _c.into_xy(),
+        //             c.into_xy()
+        //         );
+        //     }
+        // }
+        // commitments = _commitments;
+
+        let (multi_proof, _ys) = BatchProof::<Bn256>::create(
             &commitments,
             &elements.fs,
             &elements.zs,
             transcript.into_params(),
-            &tree.committer,
-            jubjub_params,
+            tree.committer,
         )?;
+        // for (i, (_y, y)) in elements.ys.iter().zip(&ys).enumerate() {
+        //     if _y != y {
+        //         println!(
+        //             "{}-th commitment is invalid: {:?} != {:?}",
+        //             i,
+        //             _y.into_repr(),
+        //             y.into_repr()
+        //         );
+        //     }
+        // }
+        // elements.ys = ys;
         let proof = VerkleProof {
             multi_proof,
             commitments,
@@ -112,7 +139,7 @@ where
     }
 }
 
-impl<P, K, E, C> VerkleTree<K, LeafNodeWith32BytesValue<E>, E, C>
+impl<'a, P, K, E, C> VerkleTree<'a, K, LeafNodeWith32BytesValue<E>, E, C>
 where
     C: Committer<E>,
     P: Default + AbstractPath,
@@ -121,7 +148,7 @@ where
     E: JubjubEngine,
 {
     pub fn get_witnesses(&self, keys: &[K]) -> anyhow::Result<MultiProofWitnesses<K, E>> {
-        get_witnesses(&self.root, keys, &self.committer)
+        get_witnesses(&self.root, keys, self.committer)
     }
 }
 
@@ -137,6 +164,9 @@ where
     K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
     E: JubjubEngine,
 {
+    let infinity_point = edwards::Point::<E, Unknown>::zero();
+    let zero = E::Fs::zero();
+
     match node {
         VerkleNode::Leaf {
             path, stem, info, ..
@@ -156,9 +186,8 @@ where
                 .clone()
                 .expect("Need to execute `compute commitment` in advance");
 
-            let infinity_point_fs = point_to_field_element(&edwards::Point::<E, Unknown>::zero())?;
             let poly = {
-                let poly_0 = E::Fs::from_raw_repr(<E::Fs as PrimeField>::Repr::from(1u64))?;
+                let poly_0 = E::Fs::one();
                 let poly_1 = stem
                     .clone()
                     .into_field_element()
@@ -167,7 +196,7 @@ where
                 for s_commitment in tmp_s_commitments.iter() {
                     poly.push(point_to_field_element(s_commitment)?);
                 }
-                poly.resize(width, infinity_point_fs);
+                poly.resize(width, zero);
 
                 poly
             };
@@ -201,7 +230,6 @@ where
 
                 let slot = (LIMBS * suffix) % width;
 
-                let zero = E::Fs::zero();
                 let limb_index = suffix / limb_bits_size;
                 let suffix_slot = 2 + limb_index;
                 let mut s_poly = vec![zero; width];
@@ -226,7 +254,7 @@ where
                     // so that we know not to build the polynomials in this case,
                     // as all the information is available before fill_leaf_tree_poly
                     // has to be called, save the count.
-                    debug_assert_eq!(poly[suffix_slot], infinity_point_fs);
+                    debug_assert_eq!(poly[suffix_slot], point_to_field_element(&infinity_point)?);
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
                         commitment_elements: CommitmentElements {
                             commitments: vec![
@@ -236,7 +264,7 @@ where
                             ],
                             elements: Elements {
                                 zs: vec![0usize, 1, suffix_slot],
-                                ys: vec![poly[0], poly[1], infinity_point_fs],
+                                ys: vec![poly[0], poly[1], poly[suffix_slot]],
                                 fs: vec![poly.clone(), poly.clone(), poly.clone()],
                             },
                         },
@@ -261,7 +289,7 @@ where
                     // but still contain the leaf marker 2^128.
                     if cfg!(debug_assertion) {
                         for i in 0..LIMBS {
-                            assert_eq!(s_poly[slot + i], infinity_point_fs);
+                            assert_eq!(s_poly[slot + i], zero);
                         }
                     }
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
@@ -274,7 +302,7 @@ where
                             ],
                             elements: Elements {
                                 zs: vec![0usize, 1, suffix_slot, slot],
-                                ys: vec![poly[0], poly[1], poly[suffix_slot], infinity_point_fs],
+                                ys: vec![poly[0], poly[1], poly[suffix_slot], zero],
                                 fs: vec![poly.clone(), poly.clone(), poly.clone(), s_poly],
                             },
                         },
@@ -345,14 +373,14 @@ where
 
             // fill in the polynomial for this node
             let width = committer.get_domain_size();
-            let mut fi = vec![E::Fs::zero(); width];
+            let mut fi = vec![zero; width];
             for (&i, child) in children.iter() {
                 fi[i] = *child.get_digest().unwrap();
             }
 
             let commitment = info.get_commitment().unwrap().clone();
 
-            for group in groups.clone() {
+            for group in groups {
                 let zi = group[0].get_branch_at(depth);
 
                 let yi = fi.clone()[zi];
@@ -371,7 +399,6 @@ where
                 // // Loop over again, collecting the children's proof elements
                 // // This is because the order is breadth-first.
                 // for group in groups {
-                let zi = group[0].get_branch_at(depth);
 
                 let child = children.get(&zi);
                 if let Some(child) = child {
@@ -465,7 +492,7 @@ impl EncodedVerkleProof {
             keys: verkle_proof
                 .keys
                 .iter()
-                .map(|k| Encoded32Bytes::encode(k))
+                .map(Encoded32Bytes::encode)
                 .collect::<Vec<_>>(),
             values: verkle_proof
                 .values
@@ -475,15 +502,13 @@ impl EncodedVerkleProof {
             extra_data_list: verkle_proof
                 .extra_data_list
                 .iter()
-                .map(|extra_data| EncodedExtProofData::encode(extra_data))
+                .map(EncodedExtProofData::encode)
                 .collect::<Vec<_>>(),
-            commitments: cs
-                .iter()
-                .map(|commitment| EncodedEcPoint::encode(commitment))
-                .collect::<Vec<_>>(),
+            commitments: cs.iter().map(EncodedEcPoint::encode).collect::<Vec<_>>(),
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn decode(
         &self,
     ) -> anyhow::Result<(
@@ -511,7 +536,7 @@ impl EncodedVerkleProof {
             .iter()
             .zip(&extra_data_list)
             .map(|(value, extra_data)| match extra_data.status {
-                ExtStatus::Present => value.decode().and_then(|v| Ok(Some(v))),
+                ExtStatus::Present => value.decode().map(Some),
                 _ => Ok(None),
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -550,6 +575,7 @@ impl EncodedVerkleProof {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>(
     cs: &mut Vec<edwards::Point<Bn256, Unknown>>,
     commitments: &mut I,
@@ -635,13 +661,14 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>
         remove_duplicates(cs, commitments, &groups[0], depth + 1)?;
         for group in groups.iter().skip(1) {
             commitments.next();
-            remove_duplicates(cs, commitments, &group, depth + 1)?;
+            remove_duplicates(cs, commitments, group, depth + 1)?;
         }
     }
 
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>(
     cs: &mut Vec<edwards::Point<Bn256, Unknown>>,
     zs: &mut Vec<usize>,
@@ -661,6 +688,8 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
             same_stem = false;
         }
     }
+
+    let infinity_point = edwards::Point::<Bn256, Unknown>::zero();
 
     let width = 256;
     let first_entry_depth = first_extra_data.depth;
@@ -688,7 +717,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                     let suffix = key.get_suffix();
                     let limb_index = (LIMBS * suffix) / width;
                     zs.push(2 + limb_index);
-                    ys.push(Fs::zero());
+                    ys.push(point_to_field_element(&infinity_point)?);
                 }
                 ExtStatus::OtherKey => {
                     let cc = commitments.next().unwrap();
@@ -724,16 +753,21 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                     ys.push(point_to_field_element(cc)?);
                     let mut tmp_leaves = [Fs::zero(); LIMBS];
                     leaf_to_commitments(&mut tmp_leaves, (*value).unwrap())?;
-                    for i in 0..LIMBS {
+                    // for i in 0..LIMBS {
+                    //     cs.push(cc.clone());
+                    //     zs.push(slot + i);
+                    //     ys.push(tmp_leaves[i]);
+                    // }
+                    for (i, tmp_leaves_i) in tmp_leaves.iter().enumerate() {
                         cs.push(cc.clone());
                         zs.push(slot + i);
-                        ys.push(tmp_leaves[i]);
+                        ys.push(*tmp_leaves_i);
                     }
                 }
             }
         }
     } else {
-        for group in groups.clone() {
+        for group in groups {
             let (key, _, extra_data) = &group[0];
             let zi = key.get_branch_at(depth);
             zs.push(zi);
@@ -743,7 +777,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                 ys.push(yi);
             } else {
                 let cc = commitments.next().unwrap();
-                let yi = point_to_field_element(cc).unwrap();
+                let yi = point_to_field_element(cc)?;
                 ys.push(yi);
                 recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1)?;
             }
@@ -763,9 +797,10 @@ impl EncodedExtProofData {
         assert!(status_depth < 256);
         result[31] = status_depth as u8;
         if let Some(poa_stem) = extra_proof_data.poa_stem {
-            for i in 0..31 {
-                result[i] = poa_stem[i];
-            }
+            // for i in 0..31 {
+            //     result[i] = poa_stem[i];
+            // }
+            result[..31].copy_from_slice(&poa_stem[..31]);
         }
 
         Self(Encoded32Bytes::encode(&result))
@@ -778,9 +813,10 @@ impl EncodedExtProofData {
         let status = ExtStatus::from(status_depth % 8);
         let poa_stem = if status == ExtStatus::OtherStem {
             let mut poa_stem = [0u8; 31];
-            for i in 0..31 {
-                poa_stem[i] = raw[i];
-            }
+            // for i in 0..31 {
+            //     poa_stem[i] = raw[i];
+            // }
+            poa_stem[..31].copy_from_slice(&raw[..31]);
 
             Some(poa_stem)
         } else {
@@ -831,16 +867,12 @@ impl EncodedElements {
             ys: elements
                 .ys
                 .iter()
-                .map(|yi| EncodedScalar::encode(yi))
+                .map(EncodedScalar::encode)
                 .collect::<Vec<_>>(),
             fs: elements
                 .fs
                 .iter()
-                .map(|fi| {
-                    fi.iter()
-                        .map(|f| EncodedScalar::encode(f))
-                        .collect::<Vec<_>>()
-                })
+                .map(|fi| fi.iter().map(EncodedScalar::encode).collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
         }
     }
@@ -878,7 +910,7 @@ impl EncodedCommitmentElements {
             commitments: elements
                 .commitments
                 .iter()
-                .map(|commitment| EncodedEcPoint::encode(commitment))
+                .map(EncodedEcPoint::encode)
                 .collect::<Vec<_>>(),
             elements: EncodedElements::encode(&elements.elements),
         }
@@ -909,12 +941,12 @@ impl EncodedIpaProof {
             l: ipa_proof
                 .l
                 .iter()
-                .map(|li| EncodedEcPoint::encode(li))
+                .map(EncodedEcPoint::encode)
                 .collect::<Vec<_>>(),
             r: ipa_proof
                 .r
                 .iter()
-                .map(|ri| EncodedEcPoint::encode(ri))
+                .map(EncodedEcPoint::encode)
                 .collect::<Vec<_>>(),
             a: EncodedScalar::encode(&ipa_proof.a),
         }
@@ -925,12 +957,12 @@ impl EncodedIpaProof {
             l: self
                 .l
                 .iter()
-                .map(|li| EncodedEcPoint::decode(li))
+                .map(EncodedEcPoint::decode)
                 .collect::<anyhow::Result<Vec<_>>>()?,
             r: self
                 .r
                 .iter()
-                .map(|ri| EncodedEcPoint::decode(ri))
+                .map(EncodedEcPoint::decode)
                 .collect::<anyhow::Result<Vec<_>>>()?,
             a: self.a.decode()?,
         })

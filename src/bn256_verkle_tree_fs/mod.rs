@@ -8,8 +8,8 @@ use self::leaf::LeafNodeWith32BytesValue;
 pub mod leaf;
 pub mod proof;
 
-pub type VerkleTreeWith32BytesKeyValue<'a> =
-    VerkleTree<[u8; 32], LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<'a, Bn256>>;
+pub type VerkleTreeWith32BytesKeyValue<'a, 'b> =
+    VerkleTree<'b, [u8; 32], LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<'a, Bn256>>;
 
 #[cfg(test)]
 mod bn256_verkle_tree_fs_tests {
@@ -17,6 +17,7 @@ mod bn256_verkle_tree_fs_tests {
     use std::path::Path;
 
     use franklin_crypto::babyjubjub::JubjubBn256;
+    use franklin_crypto::bellman::PrimeField;
 
     use crate::bn256_verkle_tree_fs::proof::{
         EncodedCommitmentElements, EncodedEcPoint, EncodedVerkleProof, VerkleProof,
@@ -28,12 +29,12 @@ mod bn256_verkle_tree_fs_tests {
     use super::VerkleTreeWith32BytesKeyValue;
 
     #[test]
-    fn test_verkle_verification_with_one_entry() {
-        // prover's view
-
+    fn test_verkle_fs_verification_with_one_entry() {
         let domain_size = 256;
         let jubjub_params = &JubjubBn256::new();
-        let committer = IpaConfig::new(domain_size, jubjub_params);
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
+
+        // prover's view
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut key = [0u8; 32];
         key[0] = 13;
@@ -51,8 +52,6 @@ mod bn256_verkle_tree_fs_tests {
 
         // verifier's view
 
-        let domain_size = 256;
-        let committer = IpaConfig::new(domain_size, jubjub_params);
         let success = proof.check(&elements.zs, &elements.ys, &committer).unwrap();
 
         assert!(
@@ -62,10 +61,10 @@ mod bn256_verkle_tree_fs_tests {
     }
 
     #[test]
-    fn test_verkle_tree_with_some_entries() {
+    fn test_verkle_tree_fs_with_some_entries() {
         let domain_size = 256;
         let jubjub_params = &JubjubBn256::new();
-        let committer = IpaConfig::new(domain_size, jubjub_params);
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut keys = vec![];
         {
@@ -251,10 +250,10 @@ mod bn256_verkle_tree_fs_tests {
     }
 
     #[test]
-    fn test_encode_verkle_proof() {
+    fn test_encode_verkle_fs_proof() {
         let domain_size = 256;
         let jubjub_params = &JubjubBn256::new();
-        let committer = IpaConfig::new(domain_size, jubjub_params);
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut keys = vec![];
         {
@@ -350,9 +349,12 @@ mod bn256_verkle_tree_fs_tests {
             key_empty_suffix_tree,
         ];
         sorted_keys.sort();
+
         let (proof, elements) = VerkleProof::create(&mut tree, &sorted_keys).unwrap();
         let encoded_proof = EncodedVerkleProof::encode(&proof);
-        let proof_path = Path::new("./test_cases").join("proof_case2.json");
+        let proof_path = Path::new("./test_cases")
+            .join("fs_case1")
+            .join("proof.json");
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -360,7 +362,9 @@ mod bn256_verkle_tree_fs_tests {
             .open(proof_path)
             .unwrap();
         serde_json::to_writer(file, &encoded_proof).unwrap();
-        let elements_path = Path::new("./test_cases").join("elements_case2.json");
+        let elements_path = Path::new("./test_cases")
+            .join("fs_case1")
+            .join("elements.json");
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -377,15 +381,33 @@ mod bn256_verkle_tree_fs_tests {
         )
         .unwrap();
 
-        let proof_path = Path::new("./test_cases").join("proof_case2.json");
+        let proof_path = Path::new("./test_cases")
+            .join("fs_case1")
+            .join("proof.json");
         let file = OpenOptions::new().read(true).open(proof_path).unwrap();
         let encoded_proof: EncodedVerkleProof = serde_json::from_reader(file).unwrap();
         let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode().unwrap();
-        let elements_path = Path::new("./test_cases").join("elements_case2.json");
+        let elements_path = Path::new("./test_cases")
+            .join("fs_case1")
+            .join("elements.json");
         let file = OpenOptions::new().read(true).open(elements_path).unwrap();
         let commitment_elements: EncodedCommitmentElements = serde_json::from_reader(file).unwrap();
         let commitment_elements = commitment_elements.decode().unwrap();
         assert_eq!(decoded_zs, commitment_elements.elements.zs);
+        for (i, (_y, y)) in decoded_ys
+            .iter()
+            .zip(&commitment_elements.elements.ys)
+            .enumerate()
+        {
+            if _y != y {
+                println!(
+                    "{}-th commitment is invalid: {:?} != {:?}",
+                    i,
+                    _y.into_repr(),
+                    y.into_repr()
+                );
+            }
+        }
         assert_eq!(decoded_ys, commitment_elements.elements.ys);
         assert_eq!(
             decoded_proof
@@ -407,9 +429,6 @@ mod bn256_verkle_tree_fs_tests {
             .check(&decoded_zs, &decoded_ys, &committer)
             .unwrap();
 
-        assert!(
-            success,
-            "Fail to pass the verification of verkle proof circuit."
-        );
+        assert!(success, "Fail to pass the verification of verkle proof.");
     }
 }

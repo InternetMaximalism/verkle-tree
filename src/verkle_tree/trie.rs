@@ -284,7 +284,9 @@ where
     }
 
     fn get_digest(&self) -> Option<&GA::Scalar> {
-        (&self.digest).into()
+        let digest = &self.digest;
+
+        digest.into()
     }
 }
 
@@ -297,7 +299,9 @@ where
     }
 
     pub fn get_commitment(&self) -> Option<&GA> {
-        (&self.commitment).into()
+        let commitment = &self.commitment;
+
+        commitment.into()
     }
 }
 
@@ -345,7 +349,7 @@ where
     ) -> Self {
         let num_nonempty_children = children.len();
         Self::Internal {
-            path: path.clone(),
+            path,
             children,
             info: InternalNodeValue {
                 num_nonempty_children,

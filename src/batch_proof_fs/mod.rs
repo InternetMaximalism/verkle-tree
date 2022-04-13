@@ -59,7 +59,6 @@ mod tests {
             &zs,
             prover_transcript.into_params(),
             ipa_conf,
-            jubjub_params,
         )?;
 
         // test_serialize_deserialize_proof(proof);
@@ -88,8 +87,8 @@ impl BatchProof<Bn256> {
         zs: &[usize],
         transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
-        jubjub_params: &<Bn256 as JubjubEngine>::Params,
     ) -> anyhow::Result<(Self, Vec<Fs>)> {
+        let jubjub_params = ipa_conf.jubjub_params;
         let mut transcript = PoseidonBn256Transcript::new(&transcript_params);
 
         // transcript.DomainSep("multiproof");
@@ -130,7 +129,8 @@ impl BatchProof<Bn256> {
             ys.push(y_i);
         }
         let r = transcript.get_challenge(); // r
-                                            // println!("r: {:?}", r);
+
+        // println!("r: {:?}", r);
 
         // Compute g(X)
         let mut g_x = vec![Fs::zero(); domain_size];
@@ -156,7 +156,7 @@ impl BatchProof<Bn256> {
 
         // Compute h(X) = g_1(X)
         let mut h_x = vec![Fs::zero(); domain_size];
-        let mut powers_of_r = Fs::one(); // powers_of_r = 1
+        let mut powers_of_r = Fs::one();
         for i in 0..num_queries {
             let z_i = read_field_element_le::<Fs>(&zs[i].to_le_bytes()).unwrap();
             let mut den = t; // den_inv = t
@@ -195,14 +195,8 @@ impl BatchProof<Bn256> {
 
         let transcript_params = transcript.into_params();
 
-        let (ipa_proof, _) = IpaProof::create(
-            e_minus_d,
-            &h_minus_g,
-            t,
-            transcript_params,
-            ipa_conf,
-            jubjub_params,
-        )?;
+        let (ipa_proof, _) =
+            IpaProof::create(e_minus_d, &h_minus_g, t, transcript_params, ipa_conf)?;
 
         Ok((BatchProof { ipa: ipa_proof, d }, ys))
     }
@@ -282,7 +276,7 @@ impl BatchProof<Bn256> {
         // There are more optimal ways to do this, but
         // this is more readable, so will leave for now
         let mut helper_scalars: Vec<Fs> = Vec::with_capacity(num_queries);
-        let mut powers_of_r = Fs::one(); // powers_of_r = 1
+        let mut powers_of_r = Fs::one();
         for z_i in zs.iter() {
             // helper_scalars[i] = r^i / (t - z_i)
             let mut t_minus_z_i = t;
@@ -318,13 +312,8 @@ impl BatchProof<Bn256> {
         let e_minus_d = e.add(&minus_d, jubjub_params);
 
         let transcript_params = transcript.into_params();
-        proof.ipa.check(
-            e_minus_d,
-            t,
-            g_2_t,
-            transcript_params,
-            ipa_conf,
-            jubjub_params,
-        )
+        proof
+            .ipa
+            .check(e_minus_d, t, g_2_t, transcript_params, ipa_conf)
     }
 }
