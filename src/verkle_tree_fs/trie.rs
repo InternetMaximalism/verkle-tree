@@ -45,6 +45,12 @@ where
     E: JubjubEngine,
 {
     pub fn new(committer: &'a C) -> Self {
+        let num_limbs = L::num_limbs();
+        assert!(
+            committer.get_domain_size() >= num_limbs + 2,
+            "domain size must be larger than or equal to {}",
+            num_limbs + 2
+        );
         Self {
             root: VerkleNode::default(),
             committer,
@@ -161,6 +167,10 @@ where
     //     depth: usize,
     //     committer: &C,
     // ) -> anyhow::Result<MultiProofWitnesses<K, GA>>;
+
+    fn bits_of_value() -> usize;
+
+    fn num_limbs() -> usize;
 }
 
 #[derive(Clone, PartialEq)]

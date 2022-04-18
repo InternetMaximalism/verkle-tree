@@ -1,4 +1,5 @@
 use franklin_crypto::babyjubjub::{edwards, JubjubBn256, JubjubEngine, Unknown};
+use franklin_crypto::bellman::bn256::Fr;
 use franklin_crypto::bellman::pairing::bn256::Bn256;
 use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 use serde::{Deserialize, Serialize};
@@ -6,12 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::batch_proof_fs::BatchProof;
 use crate::ipa_fs::config::{Committer, IpaConfig};
 use crate::ipa_fs::proof::IpaProof;
-use crate::ipa_fs::transcript::{Bn256Transcript, PoseidonBn256Transcript};
 use crate::ipa_fs::utils::{read_field_element_le, write_field_element_le};
 use crate::verkle_tree::trie::{
     AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement,
 };
-// use crate::verkle_tree::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
 use crate::verkle_tree::witness::{Elements, ExtraProofData};
 use crate::verkle_tree_fs::trie::{LeafNodeValue, VerkleNode, VerkleTree};
 use crate::verkle_tree_fs::utils::{
@@ -19,7 +18,7 @@ use crate::verkle_tree_fs::utils::{
 };
 use crate::verkle_tree_fs::witness::{CommitmentElements, MultiProofWitnesses};
 
-use super::leaf::{LeafNodeWith32BytesValue, LIMBS};
+use super::leaf::LeafNodeWith32BytesValue;
 
 #[derive(Clone)]
 pub struct VerkleProof<K, L, E, C>
@@ -51,8 +50,8 @@ where
     pub fn create(
         tree: &mut VerkleTree<K, LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<Bn256>>,
         keys: &[K],
+        transcript_params: Fr,
     ) -> anyhow::Result<(Self, Elements<<Bn256 as JubjubEngine>::Fs>)> {
-        let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         tree.compute_digest()?;
 
         let MultiProofWitnesses {
@@ -72,41 +71,13 @@ where
             values.push(val.copied());
         }
 
-        // let _commitments = elements
-        //     .fs
-        //     .iter()
-        //     .map(|poly| tree.committer.commit(&poly))
-        //     .collect::<Result<Vec<_>, _>>()?;
-        // for (i, (_c, c)) in _commitments.iter().zip(commitments).enumerate() {
-        //     if !c.eq(_c) {
-        //         println!(
-        //             "{}-th commitment is invalid: {:?} != {:?}",
-        //             i,
-        //             _c.into_xy(),
-        //             c.into_xy()
-        //         );
-        //     }
-        // }
-        // commitments = _commitments;
-
         let (multi_proof, _ys) = BatchProof::<Bn256>::create(
             &commitments,
             &elements.fs,
             &elements.zs,
-            transcript.into_params(),
+            transcript_params,
             tree.committer,
         )?;
-        // for (i, (_y, y)) in elements.ys.iter().zip(&ys).enumerate() {
-        //     if _y != y {
-        //         println!(
-        //             "{}-th commitment is invalid: {:?} != {:?}",
-        //             i,
-        //             _y.into_repr(),
-        //             y.into_repr()
-        //         );
-        //     }
-        // }
-        // elements.ys = ys;
         let proof = VerkleProof {
             multi_proof,
             commitments,
@@ -124,14 +95,14 @@ where
         &self,
         zs: &[usize],
         ys: &[<Bn256 as JubjubEngine>::Fs],
+        transcript_params: Fr,
         ipa_conf: &IpaConfig<Bn256>,
     ) -> anyhow::Result<bool> {
-        let transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         self.multi_proof.check(
             &self.commitments.clone(),
             ys,
             zs,
-            transcript.into_params(),
+            transcript_params,
             ipa_conf,
         )
     }
@@ -171,8 +142,11 @@ where
         } => {
             let depth = path.len();
             let width = committer.get_domain_size();
-            let value_size = 32; // The size of [u8; 32] in bytes.
-            let limb_bits_size = value_size * 8 / LIMBS;
+            let num_limbs = <LeafNodeWith32BytesValue<E> as LeafNodeValue<K, E>>::num_limbs();
+            let bits_of_value =
+                <LeafNodeWith32BytesValue<E> as LeafNodeValue<K, E>>::bits_of_value();
+            // let bits_of_value = width;
+            let limb_bits_size = bits_of_value / num_limbs;
             debug_assert!(limb_bits_size < E::Fs::NUM_BITS as usize);
 
             let tmp_s_commitments = info
@@ -226,7 +200,7 @@ where
                 let suffix = key.get_suffix();
                 debug_assert!(suffix < width);
 
-                let slot = (LIMBS * suffix) % width;
+                let slot = (num_limbs * suffix) % width;
 
                 let limb_index = suffix / limb_bits_size;
                 let suffix_slot = 2 + limb_index;
@@ -239,7 +213,7 @@ where
                         sub_leaves_array[i - start_index] = Some(v);
                     }
                 }
-                let count = fill_leaf_tree_poly(&mut s_poly, &sub_leaves_array)?;
+                let count = fill_leaf_tree_poly(&mut s_poly, &sub_leaves_array, num_limbs)?;
 
                 // Proof of absence: case of a missing suffix tree.
                 //
@@ -248,10 +222,6 @@ where
                 // in the other suffix tree (e.g. C2 if we are looking
                 // at C1).
                 if count == 0 {
-                    // TODO: maintain a count variable at LeafNode level
-                    // so that we know not to build the polynomials in this case,
-                    // as all the information is available before fill_leaf_tree_poly
-                    // has to be called, save the count.
                     debug_assert_eq!(poly[suffix_slot], point_to_field_element(&infinity_point)?);
                     multi_proof_commitments.merge(&mut MultiProofWitnesses {
                         commitment_elements: CommitmentElements {
@@ -286,7 +256,7 @@ where
                     // since after deletion the value would be set to zero
                     // but still contain the leaf marker 2^128.
                     if cfg!(debug_assertion) {
-                        for i in 0..LIMBS {
+                        for i in 0..num_limbs {
                             assert_eq!(s_poly[slot + i], zero);
                         }
                     }
@@ -306,17 +276,21 @@ where
                         },
                         extra_data_list: vec![ExtraProofData {
                             depth,
-                            status: ExtStatus::OtherKey, // present, since the stem is present
+                            status: ExtStatus::OtherKey,
                             poa_stem: K::Stem::default(),
                         }],
                     });
                     continue;
                 }
 
-                let mut tmp_leaves = [zero; LIMBS];
-                leaf_to_commitments(&mut tmp_leaves, *info.leaves.get(&suffix).unwrap())?;
+                let mut tmp_leaves = vec![zero; num_limbs];
+                leaf_to_commitments(
+                    &mut tmp_leaves,
+                    *info.leaves.get(&suffix).unwrap(),
+                    num_limbs,
+                )?;
                 if cfg!(debug_assertion) {
-                    for i in 0..LIMBS {
+                    for i in 0..num_limbs {
                         assert_eq!(s_poly[slot + i], tmp_leaves[i]);
                     }
                 }
@@ -392,11 +366,6 @@ where
                             fs: vec![fi.clone()],
                         },
                     });
-                // }
-
-                // // Loop over again, collecting the children's proof elements
-                // // This is because the order is breadth-first.
-                // for group in groups {
 
                 let child = children.get(&zi);
                 if let Some(child) = child {
@@ -509,6 +478,7 @@ impl EncodedVerkleProof {
     #[allow(clippy::type_complexity)]
     pub fn decode(
         &self,
+        committer: &IpaConfig<Bn256>,
     ) -> anyhow::Result<(
         VerkleProof<[u8; 32], LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<Bn256>>,
         Vec<usize>,
@@ -558,6 +528,7 @@ impl EncodedVerkleProof {
             &rc,
             &entries,
             0,
+            committer.get_domain_size(),
         )?;
 
         let verkle_proof = VerkleProof {
@@ -590,6 +561,9 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>
         }
     }
 
+    let num_limbs =
+        <LeafNodeWith32BytesValue<Bn256> as LeafNodeValue<[u8; 32], Bn256>>::num_limbs();
+
     let first_entry_depth = first_extra_data.depth;
     if same_stem && depth == first_entry_depth {
         // leaf node
@@ -615,14 +589,13 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>
                 commitments.next();
                 commitments.next();
                 cs.push(commitments.next().unwrap().clone());
-                for _ in 0..(LIMBS - 1) {
+                for _ in 0..(num_limbs - 1) {
                     commitments.next();
                 }
             }
         }
 
         for (_, _, extra_data) in entries.iter().skip(1) {
-            // leaf node
             match extra_data.status {
                 ExtStatus::Empty => {
                     // NOTICE: A empty leaf does not have the same stem with a non-empty leaf.
@@ -647,7 +620,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>
                     commitments.next();
                     commitments.next();
                     cs.push(commitments.next().unwrap().clone());
-                    for _ in 0..(LIMBS - 1) {
+                    for _ in 0..(num_limbs - 1) {
                         commitments.next();
                     }
                 }
@@ -666,7 +639,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>
     Ok(())
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>>>(
     cs: &mut Vec<edwards::Point<Bn256, Unknown>>,
     zs: &mut Vec<usize>,
@@ -675,6 +648,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
     rc: &edwards::Point<Bn256, Unknown>,
     entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
     depth: usize,
+    width: usize,
 ) -> anyhow::Result<()> {
     type Fs = <Bn256 as JubjubEngine>::Fs;
     let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
@@ -689,7 +663,11 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
 
     let infinity_point = edwards::Point::<Bn256, Unknown>::zero();
 
-    let width = 256;
+    let num_limbs =
+        <LeafNodeWith32BytesValue<Bn256> as LeafNodeValue<[u8; 32], Bn256>>::num_limbs();
+    let bits_of_value =
+        <LeafNodeWith32BytesValue<Bn256> as LeafNodeValue<[u8; 32], Bn256>>::bits_of_value();
+
     let first_entry_depth = first_extra_data.depth;
     if same_stem && depth == first_entry_depth {
         for (key, value, extra_data) in entries {
@@ -713,7 +691,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(rc.clone());
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(&infinity_point)?);
                 }
@@ -727,8 +705,8 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(rc.clone());
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
+                    let slot = (num_limbs * suffix) % bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
                     cs.push(cc.clone());
@@ -745,17 +723,12 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(rc.clone());
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
+                    let slot = (num_limbs * suffix) % bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
-                    let mut tmp_leaves = [Fs::zero(); LIMBS];
-                    leaf_to_commitments(&mut tmp_leaves, (*value).unwrap())?;
-                    // for i in 0..LIMBS {
-                    //     cs.push(cc.clone());
-                    //     zs.push(slot + i);
-                    //     ys.push(tmp_leaves[i]);
-                    // }
+                    let mut tmp_leaves = vec![Fs::zero(); num_limbs];
+                    leaf_to_commitments(&mut tmp_leaves, (*value).unwrap(), num_limbs)?;
                     for (i, tmp_leaves_i) in tmp_leaves.iter().enumerate() {
                         cs.push(cc.clone());
                         zs.push(slot + i);
@@ -777,7 +750,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a edwards::Point<Bn256, Unknown>
                 let cc = commitments.next().unwrap();
                 let yi = point_to_field_element(cc)?;
                 ys.push(yi);
-                recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1)?;
+                recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1, width)?;
             }
         }
     }
@@ -795,9 +768,6 @@ impl EncodedExtProofData {
         assert!(status_depth < 256);
         result[31] = status_depth as u8;
         if let Some(poa_stem) = extra_proof_data.poa_stem {
-            // for i in 0..31 {
-            //     result[i] = poa_stem[i];
-            // }
             result[..31].copy_from_slice(&poa_stem[..31]);
         }
 
@@ -811,9 +781,6 @@ impl EncodedExtProofData {
         let status = ExtStatus::from(status_depth % 8);
         let poa_stem = if status == ExtStatus::OtherStem {
             let mut poa_stem = [0u8; 31];
-            // for i in 0..31 {
-            //     poa_stem[i] = raw[i];
-            // }
             poa_stem[..31].copy_from_slice(&raw[..31]);
 
             Some(poa_stem)

@@ -28,7 +28,7 @@ fn sample_code() -> Result<(), Box<dyn std::error::Error>> {
 
     // verifier's view
 
-    let (proof, zs, ys) = encoded_proof.decode()?;
+    let (proof, zs, ys) = encoded_proof.decode(&committer)?;
     let is_valid: bool = proof.check(&zs, &ys, &committer)?;
     println!("is_valid: {:?}", is_valid);
 

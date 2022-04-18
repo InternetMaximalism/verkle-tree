@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn test_multi_proof_create_verify() -> Result<(), Box<dyn std::error::Error>> {
         // Shared View
-        let domain_size = 256;
+        let domain_size = 128;
         let jubjub_params = &JubjubBn256::new();
         println!("create ipa_conf");
         let ipa_conf = &IpaConfig::<Bn256>::new(domain_size, jubjub_params);
@@ -44,10 +44,11 @@ mod tests {
         let prover_transcript = PoseidonBn256Transcript::with_bytes(b"multi_proof");
         let prover_commitment_1 = ipa_conf.commit(&poly_1)?;
 
-        let commitments = vec![prover_commitment_1];
-        let fs = vec![poly_1];
+        let commitments = vec![prover_commitment_1.clone(), prover_commitment_1];
+        let fs = vec![poly_1.clone(), poly_1];
         let index_1 = 36;
-        let zs = vec![index_1];
+        let index_2 = 103;
+        let zs = vec![index_1, index_2];
         // let mut ys = vec![];
         // for i in 0..zs.len() {
         //     let y_i = fs[i][zs[i]];

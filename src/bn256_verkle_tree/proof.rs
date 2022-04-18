@@ -14,12 +14,13 @@ use crate::verkle_tree::trie::{
     AbstractKey, AbstractPath, AbstractStem, ExtStatus, IntoFieldElement, LeafNodeValue,
     VerkleNode, VerkleTree,
 };
-use crate::verkle_tree::utils::{fill_leaf_tree_poly, leaf_to_commitments, point_to_field_element};
+use crate::verkle_tree::utils::point_to_field_element;
 use crate::verkle_tree::witness::{
     CommitmentElements, Elements, ExtraProofData, MultiProofWitnesses,
 };
+use crate::verkle_tree_fs::utils::{fill_leaf_tree_poly, leaf_to_commitments};
 
-use super::leaf::{LeafNodeWith32BytesValue, LIMBS};
+use super::leaf::LeafNodeWith32BytesValue;
 
 #[derive(Clone, Debug)]
 pub struct VerkleProof<K, L, GA, C>
@@ -149,8 +150,11 @@ where
         } => {
             let depth = path.len();
             let width = committer.get_domain_size();
-            let value_size = 32; // The size of [u8; 32] in bytes.
-            let limb_bits_size = value_size * 8 / LIMBS;
+            let num_limbs = <LeafNodeWith32BytesValue<GA> as LeafNodeValue<K, GA>>::num_limbs();
+            let bits_of_value =
+                <LeafNodeWith32BytesValue<GA> as LeafNodeValue<K, GA>>::bits_of_value();
+            // let bits_of_value = width;
+            let limb_bits_size = bits_of_value / num_limbs;
             debug_assert!(limb_bits_size < GA::Scalar::NUM_BITS as usize);
 
             let tmp_s_commitments = info
@@ -203,9 +207,8 @@ where
                 let suffix = key.get_suffix();
                 debug_assert!(suffix < width);
 
-                let slot = (LIMBS * suffix) % width;
-
-                let limb_index = suffix / limb_bits_size;
+                let slot = (num_limbs * suffix) % bits_of_value;
+                let limb_index = (num_limbs * suffix) / bits_of_value;
                 let suffix_slot = 2 + limb_index;
                 let mut s_poly = vec![zero; width];
                 let start_index = limb_index * limb_bits_size;
@@ -216,7 +219,7 @@ where
                         sub_leaves_array[i - start_index] = Some(v);
                     }
                 }
-                let count = fill_leaf_tree_poly(&mut s_poly, &sub_leaves_array)?;
+                let count = fill_leaf_tree_poly(&mut s_poly, &sub_leaves_array, num_limbs)?;
 
                 // Proof of absence: case of a missing suffix tree.
                 //
@@ -259,7 +262,7 @@ where
                     // since after deletion the value would be set to zero
                     // but still contain the leaf marker 2^128.
                     if cfg!(debug_assertion) {
-                        for i in 0..LIMBS {
+                        for i in 0..num_limbs {
                             assert_eq!(s_poly[slot + i], zero);
                         }
                     }
@@ -286,10 +289,14 @@ where
                     continue;
                 }
 
-                let mut tmp_leaves = [zero; LIMBS];
-                leaf_to_commitments(&mut tmp_leaves, *info.leaves.get(&suffix).unwrap())?;
+                let mut tmp_leaves = vec![zero; num_limbs];
+                leaf_to_commitments(
+                    &mut tmp_leaves,
+                    *info.leaves.get(&suffix).unwrap(),
+                    num_limbs,
+                )?;
                 if cfg!(debug_assertion) {
-                    for i in 0..LIMBS {
+                    for i in 0..num_limbs {
                         assert_eq!(s_poly[slot + i], tmp_leaves[i]);
                     }
                 }
@@ -483,6 +490,7 @@ impl EncodedVerkleProof {
     #[allow(clippy::type_complexity)]
     pub fn decode(
         &self,
+        committer: &IpaConfig<G1Affine>,
     ) -> anyhow::Result<(
         VerkleProof<[u8; 32], LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>,
         Vec<usize>,
@@ -532,6 +540,7 @@ impl EncodedVerkleProof {
             &rc,
             &entries,
             0,
+            committer.get_domain_size(),
         )?;
 
         let verkle_proof = VerkleProof {
@@ -564,6 +573,9 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
         }
     }
 
+    let num_limbs =
+        <LeafNodeWith32BytesValue<G1Affine> as LeafNodeValue<[u8; 32], G1Affine>>::num_limbs();
+
     let first_entry_depth = first_extra_data.depth;
     if same_stem && depth == first_entry_depth {
         // leaf node
@@ -589,7 +601,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
                 commitments.next();
                 commitments.next();
                 cs.push(*commitments.next().unwrap());
-                for _ in 0..(LIMBS - 1) {
+                for _ in 0..(num_limbs - 1) {
                     commitments.next();
                 }
             }
@@ -621,7 +633,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
                     commitments.next();
                     commitments.next();
                     cs.push(*commitments.next().unwrap());
-                    for _ in 0..(LIMBS - 1) {
+                    for _ in 0..(num_limbs - 1) {
                         commitments.next();
                     }
                 }
@@ -640,7 +652,7 @@ fn remove_duplicates<'a, I: Iterator<Item = &'a G1Affine>>(
     Ok(())
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
     cs: &mut Vec<G1Affine>,
     zs: &mut Vec<usize>,
@@ -649,6 +661,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
     rc: &G1Affine,
     entries: &[([u8; 32], Option<[u8; 32]>, ExtraProofData<[u8; 32]>)],
     depth: usize,
+    width: usize,
 ) -> anyhow::Result<()> {
     let groups = group_entries(entries, |(key, _, _)| key.get_branch_at(depth));
 
@@ -662,7 +675,12 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
 
     let infinity_point = G1Affine::zero();
 
-    let width = 256;
+    let num_limbs =
+        <LeafNodeWith32BytesValue<G1Affine> as LeafNodeValue<[u8; 32], G1Affine>>::num_limbs();
+    let bits_of_value =
+        <LeafNodeWith32BytesValue<G1Affine> as LeafNodeValue<[u8; 32], G1Affine>>::bits_of_value();
+    // let bits_of_value = width;
+
     let first_entry_depth = first_extra_data.depth;
     if same_stem && depth == first_entry_depth {
         for (key, value, extra_data) in entries {
@@ -686,7 +704,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(&infinity_point)?);
                 }
@@ -700,8 +718,8 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
+                    let slot = (num_limbs * suffix) % bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
                     cs.push(*cc);
@@ -718,17 +736,12 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
                     ys.push(read_field_element_le(&key.get_stem().unwrap())?);
                     cs.push(*rc);
                     let suffix = key.get_suffix();
-                    let limb_index = (LIMBS * suffix) / width;
-                    let slot = (LIMBS * suffix) % width;
+                    let limb_index = (num_limbs * suffix) / bits_of_value;
+                    let slot = (num_limbs * suffix) % bits_of_value;
                     zs.push(2 + limb_index);
                     ys.push(point_to_field_element(cc)?);
-                    let mut tmp_leaves = [Fr::zero(); LIMBS];
-                    leaf_to_commitments(&mut tmp_leaves, (*value).unwrap())?;
-                    // for i in 0..LIMBS {
-                    //     cs.push(*cc);
-                    //     zs.push(slot + i);
-                    //     ys.push(tmp_leaves[i]);
-                    // }
+                    let mut tmp_leaves = vec![Fr::zero(); num_limbs];
+                    leaf_to_commitments(&mut tmp_leaves, (*value).unwrap(), num_limbs)?;
                     for (i, tmp_leaves_i) in tmp_leaves.iter().enumerate() {
                         cs.push(*cc);
                         zs.push(slot + i);
@@ -750,7 +763,7 @@ fn recover_commitments<'a, I: Iterator<Item = &'a G1Affine>>(
                 let cc = commitments.next().unwrap();
                 let yi = point_to_field_element(cc)?;
                 ys.push(yi);
-                recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1)?;
+                recover_commitments(cs, zs, ys, commitments, cc, &group, depth + 1, width)?;
             }
         }
     }

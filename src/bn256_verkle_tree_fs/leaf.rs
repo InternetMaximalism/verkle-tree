@@ -7,8 +7,6 @@ use crate::verkle_tree::trie::{AbstractKey, AbstractPath, AbstractStem, IntoFiel
 use crate::verkle_tree_fs::trie::{LeafNodeValue, NodeValue};
 use crate::verkle_tree_fs::utils::{fill_leaf_tree_poly, point_to_field_element};
 
-pub(crate) const LIMBS: usize = 2;
-
 #[derive(Clone, PartialEq)]
 pub struct LeafNodeWith32BytesValue<E>
 where
@@ -79,19 +77,23 @@ where
     }
 }
 
-pub fn compute_commitment_of_leaf_node<K, E, C>(
+pub fn compute_commitment_of_leaf_node<P, K, E, C>(
     committer: &C,
     stem: &mut K::Stem,
     info: &mut LeafNodeWith32BytesValue<E>,
 ) -> anyhow::Result<E::Fs>
 where
-    K: AbstractKey,
-    K::Stem: IntoFieldElement<E::Fs>,
+    P: Default + AbstractPath,
+    K: AbstractKey<Path = P>,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
     E: JubjubEngine,
     C: Committer<E>,
 {
-    let value_size = 32;
-    let limb_bits_size = value_size * 8 / LIMBS;
+    let width = committer.get_domain_size();
+    let num_limbs = <LeafNodeWith32BytesValue<E> as LeafNodeValue<K, E>>::num_limbs();
+    let bits_of_value = <LeafNodeWith32BytesValue<E> as LeafNodeValue<K, E>>::bits_of_value();
+    // let bits_of_value = width;
+    let limb_bits_size = bits_of_value / num_limbs;
     debug_assert!(limb_bits_size < E::Fs::NUM_BITS as usize);
 
     let poly_0 = E::Fs::one();
@@ -101,7 +103,6 @@ where
         .map_err(|_| anyhow::anyhow!("unreachable code"))?;
     let mut poly = vec![poly_0, poly_1];
 
-    let width = committer.get_domain_size();
     let mut leaves_array = vec![None; width];
     for (&i, &v) in info.leaves.iter() {
         leaves_array[i] = Some(v);
@@ -109,7 +110,7 @@ where
     let mut s_commitments = vec![];
     for limb in leaves_array.chunks(limb_bits_size) {
         let mut sub_poly = vec![E::Fs::zero(); width];
-        let _count = fill_leaf_tree_poly(&mut sub_poly, limb)?;
+        let _count = fill_leaf_tree_poly(&mut sub_poly, limb, num_limbs)?;
         let tmp_s_commitment = committer
             .commit(&sub_poly)
             .or_else(|_| anyhow::bail!("Fail to compute the commitment of the polynomial."))?;
@@ -177,6 +178,14 @@ where
         stem: &mut K::Stem,
         committer: &C,
     ) -> anyhow::Result<E::Fs> {
-        compute_commitment_of_leaf_node::<K, _, _>(committer, stem, self)
+        compute_commitment_of_leaf_node::<_, K, _, _>(committer, stem, self)
+    }
+
+    fn bits_of_value() -> usize {
+        256
+    }
+
+    fn num_limbs() -> usize {
+        2
     }
 }

@@ -382,7 +382,8 @@ mod bn256_verkle_tree_tests {
             .join("proof.json");
         let file = OpenOptions::new().read(true).open(proof_path).unwrap();
         let encoded_proof: EncodedVerkleProof = serde_json::from_reader(file).unwrap();
-        let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode().unwrap();
+        let (decoded_proof, decoded_zs, decoded_ys) =
+            encoded_proof.decode(&tree.committer).unwrap();
         let elements_path = Path::new("./test_cases")
             .join("fr_case1")
             .join("elements.json");

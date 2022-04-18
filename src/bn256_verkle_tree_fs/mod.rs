@@ -22,6 +22,7 @@ mod bn256_verkle_tree_fs_tests {
     use crate::bn256_verkle_tree_fs::proof::{
         EncodedCommitmentElements, EncodedEcPoint, EncodedVerkleProof, VerkleProof,
     };
+    use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
     use crate::ipa_fs::config::IpaConfig;
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
     use crate::verkle_tree_fs::witness::CommitmentElements;
@@ -48,11 +49,21 @@ mod bn256_verkle_tree_fs_tests {
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
-        let (proof, elements) = VerkleProof::create(&mut tree, &[key]).unwrap();
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let (proof, elements) =
+            VerkleProof::create(&mut tree, &[key], prover_transcript.into_params()).unwrap();
 
         // verifier's view
 
-        let success = proof.check(&elements.zs, &elements.ys, &committer).unwrap();
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let success = proof
+            .check(
+                &elements.zs,
+                &elements.ys,
+                verifier_transcript.into_params(),
+                &committer,
+            )
+            .unwrap();
 
         assert!(
             success,
@@ -350,7 +361,9 @@ mod bn256_verkle_tree_fs_tests {
         ];
         sorted_keys.sort();
 
-        let (proof, elements) = VerkleProof::create(&mut tree, &sorted_keys).unwrap();
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let (proof, elements) =
+            VerkleProof::create(&mut tree, &sorted_keys, prover_transcript.into_params()).unwrap();
         let encoded_proof = EncodedVerkleProof::encode(&proof);
         let proof_path = Path::new("./test_cases")
             .join("fs_case1")
@@ -386,7 +399,7 @@ mod bn256_verkle_tree_fs_tests {
             .join("proof.json");
         let file = OpenOptions::new().read(true).open(proof_path).unwrap();
         let encoded_proof: EncodedVerkleProof = serde_json::from_reader(file).unwrap();
-        let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode().unwrap();
+        let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode(tree.committer).unwrap();
         let elements_path = Path::new("./test_cases")
             .join("fs_case1")
             .join("elements.json");
@@ -425,8 +438,14 @@ mod bn256_verkle_tree_fs_tests {
         let domain_size = 256;
         let jubjub_params = &JubjubBn256::new();
         let committer = IpaConfig::new(domain_size, jubjub_params);
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
         let success = decoded_proof
-            .check(&decoded_zs, &decoded_ys, &committer)
+            .check(
+                &decoded_zs,
+                &decoded_ys,
+                verifier_transcript.into_params(),
+                &committer,
+            )
             .unwrap();
 
         assert!(success, "Fail to pass the verification of verkle proof.");
