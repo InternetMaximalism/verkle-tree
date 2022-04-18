@@ -1,37 +1,41 @@
-use franklin_crypto::bellman::bn256::G1Affine;
+use franklin_crypto::bellman::bn256::Bn256;
 
-use crate::ipa_fr::config::IpaConfig;
-use crate::verkle_tree::trie::VerkleTree;
+use crate::ipa_fs::config::IpaConfig;
+use crate::verkle_tree_fs::trie::VerkleTree;
 
 use self::leaf::LeafNodeWith32BytesValue;
 
 pub mod leaf;
-pub mod path;
 pub mod proof;
 
-pub type VerkleTreeWith32BytesKeyValue =
-    VerkleTree<[u8; 32], LeafNodeWith32BytesValue<G1Affine>, G1Affine, IpaConfig<G1Affine>>;
+pub type VerkleTreeWith32BytesKeyValue<'a, 'b> =
+    VerkleTree<'b, [u8; 32], LeafNodeWith32BytesValue<Bn256>, Bn256, IpaConfig<'a, Bn256>>;
 
 #[cfg(test)]
-mod bn256_verkle_tree_tests {
+mod bn256_verkle_tree_fs_tests {
     use std::fs::OpenOptions;
     use std::path::Path;
 
-    use crate::bn256_verkle_tree::proof::{
+    use franklin_crypto::babyjubjub::JubjubBn256;
+    use franklin_crypto::bellman::PrimeField;
+
+    use crate::bn256_verkle_tree_fs::proof::{
         EncodedCommitmentElements, EncodedEcPoint, EncodedVerkleProof, VerkleProof,
     };
-    use crate::ipa_fr::config::IpaConfig;
+    use crate::ipa_fr::transcript::{Bn256Transcript, PoseidonBn256Transcript};
+    use crate::ipa_fs::config::IpaConfig;
     use crate::verkle_tree::trie::{AbstractKey, ExtStatus};
-    use crate::verkle_tree::witness::CommitmentElements;
+    use crate::verkle_tree_fs::witness::CommitmentElements;
 
     use super::VerkleTreeWith32BytesKeyValue;
 
     #[test]
-    fn test_verkle_verification_with_one_entry() {
-        // prover's view
-
+    fn test_verkle_fs_verification_with_one_entry() {
         let domain_size = 256;
-        let committer = IpaConfig::new(domain_size);
+        let jubjub_params = &JubjubBn256::new();
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
+
+        // prover's view
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut key = [0u8; 32];
         key[0] = 13;
@@ -41,17 +45,25 @@ mod bn256_verkle_tree_tests {
         tree.compute_digest().unwrap();
 
         let result = tree.get_witnesses(&[key]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
 
-        let (proof, elements) = VerkleProof::create(&mut tree, &[key]).unwrap();
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let (proof, elements) =
+            VerkleProof::create(&mut tree, &[key], prover_transcript.into_params()).unwrap();
 
         // verifier's view
 
-        let domain_size = 256;
-        let committer = IpaConfig::new(domain_size);
-        let success = proof.check(&elements.zs, &elements.ys, &committer).unwrap();
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let success = proof
+            .check(
+                &elements.zs,
+                &elements.ys,
+                verifier_transcript.into_params(),
+                &committer,
+            )
+            .unwrap();
 
         assert!(
             success,
@@ -60,9 +72,10 @@ mod bn256_verkle_tree_tests {
     }
 
     #[test]
-    fn test_verkle_tree_with_some_entries() {
+    fn test_verkle_tree_fs_with_some_entries() {
         let domain_size = 256;
-        let committer = IpaConfig::new(domain_size);
+        let jubjub_params = &JubjubBn256::new();
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut keys = vec![];
         {
@@ -114,7 +127,7 @@ mod bn256_verkle_tree_tests {
         tree.compute_digest().unwrap();
 
         let result = tree.get_witnesses(&[keys[0]]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("zs: {:?}", result.commitment_elements.elements.zs);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         println!("extra_data_list: {:?}", result.extra_data_list);
@@ -150,7 +163,7 @@ mod bn256_verkle_tree_tests {
         };
 
         let result = tree.get_witnesses(&[key_empty_leaf]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         assert_eq!(result.commitment_elements.elements.zs, [13, 101]);
         assert_eq!(
@@ -174,7 +187,7 @@ mod bn256_verkle_tree_tests {
         };
 
         let result = tree.get_witnesses(&[key_other_stem]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         println!("ys: {:?}", result.commitment_elements.elements.ys);
         assert_eq!(result.commitment_elements.elements.zs, [255, 0, 1]);
         assert_eq!(
@@ -202,7 +215,7 @@ mod bn256_verkle_tree_tests {
         };
 
         let result = tree.get_witnesses(&[key_other_key]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         assert_eq!(
             result.commitment_elements.elements.zs,
             [13, 103, 0, 1, 3, 250]
@@ -231,7 +244,7 @@ mod bn256_verkle_tree_tests {
         };
 
         let result = tree.get_witnesses(&[key_empty_suffix_tree]).unwrap();
-        println!("commitments: {:?}", result.commitment_elements.commitments);
+        // println!("commitments: {:?}", result.commitment_elements.commitments);
         assert_eq!(result.commitment_elements.elements.zs, [13, 103, 0, 1, 2]);
         assert_eq!(
             result.commitment_elements.elements.ys.len(),
@@ -248,9 +261,10 @@ mod bn256_verkle_tree_tests {
     }
 
     #[test]
-    fn test_encode_verkle_proof() {
+    fn test_encode_verkle_fs_proof() {
         let domain_size = 256;
-        let committer = IpaConfig::new(domain_size);
+        let jubjub_params = &JubjubBn256::new();
+        let committer = &IpaConfig::new(domain_size, jubjub_params);
         let mut tree = VerkleTreeWith32BytesKeyValue::new(committer);
         let mut keys = vec![];
         {
@@ -346,10 +360,13 @@ mod bn256_verkle_tree_tests {
             key_empty_suffix_tree,
         ];
         sorted_keys.sort();
-        let (proof, elements) = VerkleProof::create(&mut tree, &sorted_keys).unwrap();
+
+        let prover_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
+        let (proof, elements) =
+            VerkleProof::create(&mut tree, &sorted_keys, prover_transcript.into_params()).unwrap();
         let encoded_proof = EncodedVerkleProof::encode(&proof);
         let proof_path = Path::new("./test_cases")
-            .join("fr_case1")
+            .join("fs_case1")
             .join("proof.json");
         let file = OpenOptions::new()
             .write(true)
@@ -359,7 +376,7 @@ mod bn256_verkle_tree_tests {
             .unwrap();
         serde_json::to_writer(file, &encoded_proof).unwrap();
         let elements_path = Path::new("./test_cases")
-            .join("fr_case1")
+            .join("fs_case1")
             .join("elements.json");
         let file = OpenOptions::new()
             .write(true)
@@ -378,37 +395,57 @@ mod bn256_verkle_tree_tests {
         .unwrap();
 
         let proof_path = Path::new("./test_cases")
-            .join("fr_case1")
+            .join("fs_case1")
             .join("proof.json");
         let file = OpenOptions::new().read(true).open(proof_path).unwrap();
         let encoded_proof: EncodedVerkleProof = serde_json::from_reader(file).unwrap();
-        let (decoded_proof, decoded_zs, decoded_ys) =
-            encoded_proof.decode(&tree.committer).unwrap();
+        let (decoded_proof, decoded_zs, decoded_ys) = encoded_proof.decode(tree.committer).unwrap();
         let elements_path = Path::new("./test_cases")
-            .join("fr_case1")
+            .join("fs_case1")
             .join("elements.json");
         let file = OpenOptions::new().read(true).open(elements_path).unwrap();
         let commitment_elements: EncodedCommitmentElements = serde_json::from_reader(file).unwrap();
         let commitment_elements = commitment_elements.decode().unwrap();
         assert_eq!(decoded_zs, commitment_elements.elements.zs);
+        for (i, (_y, y)) in decoded_ys
+            .iter()
+            .zip(&commitment_elements.elements.ys)
+            .enumerate()
+        {
+            if _y != y {
+                println!(
+                    "{}-th commitment is invalid: {:?} != {:?}",
+                    i,
+                    _y.into_repr(),
+                    y.into_repr()
+                );
+            }
+        }
         assert_eq!(decoded_ys, commitment_elements.elements.ys);
         assert_eq!(
             decoded_proof
                 .commitments
                 .iter()
-                .map(EncodedEcPoint::encode)
+                .map(|v| EncodedEcPoint::encode(v))
                 .collect::<Vec<_>>(),
             commitment_elements
                 .commitments
                 .iter()
-                .map(EncodedEcPoint::encode)
+                .map(|v| EncodedEcPoint::encode(v))
                 .collect::<Vec<_>>()
         );
 
         let domain_size = 256;
-        let committer = IpaConfig::new(domain_size);
+        let jubjub_params = &JubjubBn256::new();
+        let committer = IpaConfig::new(domain_size, jubjub_params);
+        let verifier_transcript = PoseidonBn256Transcript::with_bytes(b"verkle_tree");
         let success = decoded_proof
-            .check(&decoded_zs, &decoded_ys, &committer)
+            .check(
+                &decoded_zs,
+                &decoded_ys,
+                verifier_transcript.into_params(),
+                &committer,
+            )
             .unwrap();
 
         assert!(success, "Fail to pass the verification of verkle proof.");

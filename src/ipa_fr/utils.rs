@@ -50,11 +50,11 @@ pub fn read_field_element_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     let mut repr = F::Repr::default();
     let mut padded_bytes = bytes.to_vec();
     let num_bits = F::NUM_BITS as usize;
-    assert!(bytes.len() <= num_bits);
+    // assert!(bytes.len() <= (num_bits + 7) / 8);
     // for _ in bytes.len()..num_bits {
     //     padded_bytes.push(0);
     // }
-    padded_bytes.resize(num_bits, 0);
+    padded_bytes.resize((num_bits + 7) / 8, 0);
     repr.read_le::<&[u8]>(padded_bytes.as_ref())?;
     let value = F::from_repr(repr)?;
 

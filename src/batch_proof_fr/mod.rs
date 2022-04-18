@@ -106,7 +106,7 @@ impl BatchProof<G1Affine> {
 
         let domain_size = ipa_conf.get_domain_size();
         for i in 0..num_queries {
-            transcript.commit_point(&commitments[i], &rns_params)?; // C
+            transcript.commit_point(&commitments[i], rns_params)?; // C
 
             assert!(
                 zs[i] < domain_size,
@@ -144,7 +144,7 @@ impl BatchProof<G1Affine> {
 
         let d = ipa_conf.commit(&g_x)?;
 
-        transcript.commit_point(&d, &rns_params)?; // D
+        transcript.commit_point(&d, rns_params)?; // D
 
         let t = transcript.get_challenge(); // t
 
@@ -183,7 +183,7 @@ impl BatchProof<G1Affine> {
             "commit h_x: {} s",
             start.elapsed().as_micros() as f64 / 1000000.0
         );
-        transcript.commit_point(&e, &rns_params)?; // E
+        transcript.commit_point(&e, rns_params)?; // E
 
         let mut minus_d = G1::zero();
         minus_d.sub_assign(&d.into_projective());
@@ -241,7 +241,7 @@ impl BatchProof<G1Affine> {
         for i in 0..num_queries {
             assert!(zs[i] < domain_size);
             let start = std::time::Instant::now();
-            transcript.commit_point(&commitments[i], &rns_params)?;
+            transcript.commit_point(&commitments[i], rns_params)?;
             println!(
                 "updated transcript {}/{}: {} s",
                 3 * i + 1,
@@ -269,7 +269,7 @@ impl BatchProof<G1Affine> {
         let r = transcript.get_challenge();
         // println!("r: {:?}", r);
 
-        transcript.commit_point(&proof.d, &rns_params)?;
+        transcript.commit_point(&proof.d, rns_params)?;
 
         let t = transcript.get_challenge();
         // println!("t: {:?}", t);
@@ -305,7 +305,7 @@ impl BatchProof<G1Affine> {
             e.add_assign(&tmp); // e += c_i * helper_scalars_i
         }
 
-        transcript.commit_point(&e.into_affine(), &rns_params)?;
+        transcript.commit_point(&e.into_affine(), rns_params)?;
 
         let mut e_minus_d = e;
         e_minus_d.sub_assign(&proof.d.into_projective());

@@ -4,8 +4,6 @@ use franklin_crypto::babyjubjub::{JubjubEngine, Unknown};
 use franklin_crypto::bellman::{Field, PrimeField, PrimeFieldRepr};
 use sha2::{Digest, Sha256};
 
-use super::config::DOMAIN_SIZE;
-
 pub fn log2_ceil(value: usize) -> usize {
     assert!(value != 0, "The first argument must be a positive number.");
 
@@ -54,11 +52,11 @@ pub fn read_field_element_le<F: PrimeField>(bytes: &[u8]) -> anyhow::Result<F> {
     let mut repr = F::Repr::default();
     let mut padded_bytes = bytes.to_vec();
     let num_bits = F::NUM_BITS as usize;
-    assert!(bytes.len() <= num_bits);
+    // assert!(bytes.len() <= (num_bits + 7) / 8);
     // for _ in bytes.len()..num_bits {
     //     padded_bytes.push(0);
     // }
-    padded_bytes.resize(num_bits, 0);
+    padded_bytes.resize((num_bits + 7) / 8, 0);
     repr.read_le::<&[u8]>(padded_bytes.as_ref())?;
     let value = F::from_repr(repr)?;
 
@@ -93,6 +91,39 @@ pub fn write_field_element_be<F: PrimeField>(scalar: &F) -> Vec<u8> {
     result.reverse();
 
     result
+}
+
+const FS_REPR_3_MASK: u64 = 0x03FFFFFFFFFFFFFF; // (250 - 192) bits
+
+pub fn convert_fr_to_fs<E: JubjubEngine>(value: &E::Fr) -> anyhow::Result<E::Fs> {
+    let raw_value = value.into_repr();
+    let mut raw_result = <E::Fs as PrimeField>::Repr::default();
+    raw_result.as_mut()[0] = raw_value.as_ref()[0];
+    raw_result.as_mut()[1] = raw_value.as_ref()[1];
+    raw_result.as_mut()[2] = raw_value.as_ref()[2];
+    raw_result.as_mut()[3] = raw_value.as_ref()[3] & FS_REPR_3_MASK;
+    let result = E::Fs::from_repr(raw_result)?;
+
+    Ok(result)
+}
+
+pub fn convert_fs_to_fr<E: JubjubEngine>(value: &E::Fs) -> anyhow::Result<E::Fr> {
+    let raw_value = value.into_repr();
+    let raw_result = convert_fs_repr_to_fr_repr::<E>(&raw_value)?;
+    let result = E::Fr::from_repr(raw_result)?;
+
+    Ok(result)
+}
+
+pub fn convert_fs_repr_to_fr_repr<E: JubjubEngine>(
+    raw_value: &<E::Fs as PrimeField>::Repr,
+) -> anyhow::Result<<E::Fr as PrimeField>::Repr> {
+    let mut raw_result = <E::Fr as PrimeField>::Repr::default();
+    for (r, &v) in raw_result.as_mut().iter_mut().zip(raw_value.as_ref()) {
+        let _ = std::mem::replace(r, v);
+    }
+
+    Ok(raw_result)
 }
 
 #[test]
@@ -199,9 +230,9 @@ pub fn fold_scalars<F: PrimeField>(a: &[F], b: &[F], x: &F) -> anyhow::Result<Ve
     }
 
     let mut result = b.to_vec();
-    for i in 0..result.len() {
-        result[i].mul_assign(x);
-        result[i].add_assign(&a[i]);
+    for (result_i, a_i) in result.iter_mut().zip(a) {
+        result_i.mul_assign(x);
+        result_i.add_assign(a_i);
     }
 
     Ok(result)
@@ -292,25 +323,4 @@ pub fn commit<E: JubjubEngine>(
     let result = multi_scalar::<E>(group_elements, polynomial, jubjub_params)?;
 
     Ok(result)
-}
-
-pub fn test_poly<F: PrimeField>(polynomial: &[u64]) -> Vec<F> {
-    let n = polynomial.len();
-    assert!(
-        n <= DOMAIN_SIZE,
-        "polynomial cannot exceed {} coefficients",
-        DOMAIN_SIZE
-    );
-
-    let mut polynomial_fr = Vec::with_capacity(DOMAIN_SIZE);
-    for polynomial_i in polynomial {
-        polynomial_fr.push(read_field_element_le(&polynomial_i.to_le_bytes()).unwrap());
-    }
-
-    // for _ in n..DOMAIN_SIZE {
-    //     polynomial_fr.push(F::zero());
-    // }
-    polynomial_fr.resize(DOMAIN_SIZE, F::zero());
-
-    polynomial_fr
 }

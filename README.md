@@ -158,7 +158,7 @@ Example:
 
 ```sh
 cargo test -- test_encode_verkle_proof --nocapture
-cat test_cases/proof_case2.json
+cat test_cases/case1/proof.json
 ```
 
 ```json

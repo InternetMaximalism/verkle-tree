@@ -1,22 +1,25 @@
-use core::fmt::Debug;
-use franklin_crypto::bellman::{CurveAffine, Field, PrimeField};
+use franklin_crypto::babyjubjub::{edwards, JubjubEngine, Unknown};
+use franklin_crypto::bellman::Field;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 
-use crate::ipa_fr::config::Committer;
+use crate::ipa_fs::config::Committer;
+use crate::verkle_tree::trie::{
+    AbstractKey, AbstractPath, AbstractStem, AbstractValue, IntoFieldElement,
+};
 
 use super::utils::point_to_field_element;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct VerkleTree<K, L, GA, C>
+#[derive(PartialEq)]
+pub struct VerkleTree<'a, K, L, E, C>
 where
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    C: Committer<GA>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
+    C: Committer<E>,
 {
-    pub root: VerkleNode<K, L, GA>,
-    pub(crate) committer: C,
+    pub root: VerkleNode<K, L, E>,
+    pub(crate) committer: &'a C,
 }
 
 // impl<K, L, GA> Default for VerkleTree<K, L, GA>
@@ -34,15 +37,14 @@ where
 //     }
 // }
 
-impl<K, L, GA, C> VerkleTree<K, L, GA, C>
+impl<'a, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
-    C: Committer<GA>,
+    C: Committer<E>,
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
-    pub fn new(committer: C) -> Self {
+    pub fn new(committer: &'a C) -> Self {
         let num_limbs = L::num_limbs();
         assert!(
             committer.get_domain_size() >= num_limbs + 2,
@@ -60,15 +62,14 @@ where
     }
 }
 
-impl<P, K, L, GA, C> VerkleTree<K, L, GA, C>
+impl<'a, P, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
-    C: Committer<GA>,
+    C: Committer<E>,
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     /// Inserts `(key, value)` entry in given Verkle tree.
     /// This method updates the entry to the new value and returns the old value,
@@ -102,122 +103,30 @@ where
 //     fn compute_digest(&mut self) -> Result<Self::Digest, Self::Err>;
 // }
 
-impl<P, K, L, GA, C> VerkleTree<K, L, GA, C>
+impl<'a, P, K, L, E, C> VerkleTree<'a, K, L, E, C>
 where
-    C: Committer<GA>,
+    C: Committer<E>,
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     /// Computes the digest of given Verkle tree.
-    pub fn compute_digest(&mut self) -> anyhow::Result<GA::Scalar> {
-        self.root.compute_digest(&self.committer)
+    pub fn compute_digest(&mut self) -> anyhow::Result<E::Fs> {
+        self.root.compute_digest(self.committer)
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExtStatus {
-    Empty,           // path led to a empty node
-    OtherStem,       // path led to a node with a different stem
-    EmptySuffixTree, // stem is present, but suffix tree is not present
-    OtherKey,        // stem and suffix tree is present
-    Present,         // key is present
-}
+// pub trait IntoFieldElement<F: PrimeField> {
+//     type Err: Send + Sync + 'static;
 
-impl From<u8> for ExtStatus {
-    fn from(value: u8) -> Self {
-        if value == 0 {
-            ExtStatus::Empty
-        } else if value == 1 {
-            ExtStatus::OtherStem
-        } else if value == 2 {
-            ExtStatus::EmptySuffixTree
-        } else if value == 3 {
-            ExtStatus::OtherKey
-        } else if value == 4 {
-            ExtStatus::Present
-        } else {
-            panic!("fail to convert");
-        }
-    }
-}
+//     fn into_field_element(self) -> Result<F, Self::Err>;
+// }
 
-impl From<usize> for ExtStatus {
-    fn from(value: usize) -> Self {
-        if value == 0 {
-            ExtStatus::Empty
-        } else if value == 1 {
-            ExtStatus::OtherStem
-        } else if value == 2 {
-            ExtStatus::EmptySuffixTree
-        } else if value == 3 {
-            ExtStatus::OtherKey
-        } else if value == 4 {
-            ExtStatus::Present
-        } else {
-            panic!("fail to convert");
-        }
-    }
-}
-
-pub trait AbstractKey: Clone + Copy + Debug + Ord {
-    type Stem: AbstractStem + Default;
-    type Path: AbstractPath + Default;
-
-    fn get_stem(&self) -> Self::Stem;
-
-    fn get_suffix(&self) -> usize;
-
-    fn to_path(&self) -> Self::Path;
-
-    fn get_branch_at(&self, depth: usize) -> usize;
-}
-
-pub trait AbstractValue: Clone + Copy + Debug + Eq {}
-
-pub trait AbstractPath: Sized + Clone + Debug + Default + Eq + IntoIterator<Item = usize> {
-    type RemovePrefixError: Debug + Send + Sync + 'static;
-
-    fn get_next_path_and_branch(&self) -> (Self, usize);
-
-    fn get_suffix(&self) -> usize;
-
-    /// Returns if `self` is a proper prefix of `full_path`.
-    ///
-    /// If `self` is non-empty, this function returns `true`.
-    ///
-    /// If `self` is equal to `full_path`, this function returns `false`.
-    fn is_proper_prefix_of(&self, full_path: &Self) -> bool;
-
-    fn remove_prefix(&self, prefix: &Self) -> Result<Self, Self::RemovePrefixError>;
-
-    fn len(&self) -> usize;
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn push(&mut self, value: usize);
-}
-
-pub trait AbstractStem: Clone + Debug + Eq {
-    type Path: AbstractPath;
-
-    fn to_path(&self) -> Self::Path;
-}
-
-pub trait IntoFieldElement<F: PrimeField> {
-    type Err: Send + Sync + 'static;
-
-    fn into_field_element(self) -> Result<F, Self::Err>;
-}
-
-pub trait NodeValue<GA>
+pub trait NodeValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     fn len(&self) -> usize;
 
@@ -225,15 +134,15 @@ where
         self.len() == 0
     }
 
-    fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar>;
+    fn get_digest_mut(&mut self) -> &mut Option<E::Fs>;
 
-    fn get_digest(&self) -> Option<&GA::Scalar>;
+    fn get_digest(&self) -> Option<&E::Fs>;
 }
 
-pub trait LeafNodeValue<K, GA>: Clone + Default + NodeValue<GA>
+pub trait LeafNodeValue<K, E>: Clone + Default + NodeValue<E>
 where
     K: AbstractKey,
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     type Value: AbstractValue;
 
@@ -245,11 +154,11 @@ where
 
     fn remove(&mut self, key: &usize) -> Option<Self::Value>;
 
-    fn compute_digest<C: Committer<GA>>(
+    fn compute_digest<C: Committer<E>>(
         &mut self,
         stem: &mut K::Stem,
         committer: &C,
-    ) -> anyhow::Result<GA::Scalar>;
+    ) -> anyhow::Result<E::Fs>;
 
     // fn get_witnesses<C: Committer<GA>>(
     //     &self,
@@ -264,63 +173,63 @@ where
     fn num_limbs() -> usize;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InternalNodeValue<GA>
+#[derive(Clone, PartialEq)]
+pub struct InternalNodeValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     /// The number of children which are `Some` rather than `None`.
     num_nonempty_children: usize,
 
     /// The commitment of this node.
     /// If it has not computed yet, `commitment` set `None`.
-    commitment: Option<GA>,
+    commitment: Option<edwards::Point<E, Unknown>>,
 
     /// The digest of `commitment`.
     /// If it has not computed yet, `digest` set `None`.
-    digest: Option<GA::Scalar>,
+    digest: Option<E::Fs>,
 }
 
-impl<GA> NodeValue<GA> for InternalNodeValue<GA>
+impl<E> NodeValue<E> for InternalNodeValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
     fn len(&self) -> usize {
         self.num_nonempty_children
     }
 
-    fn get_digest_mut(&mut self) -> &mut Option<GA::Scalar> {
+    fn get_digest_mut(&mut self) -> &mut Option<E::Fs> {
         &mut self.digest
     }
 
-    fn get_digest(&self) -> Option<&GA::Scalar> {
+    fn get_digest(&self) -> Option<&E::Fs> {
         let digest = &self.digest;
 
         digest.into()
     }
 }
 
-impl<GA> InternalNodeValue<GA>
+impl<E> InternalNodeValue<E>
 where
-    GA: CurveAffine,
+    E: JubjubEngine,
 {
-    pub fn get_commitment_mut(&mut self) -> &mut Option<GA> {
+    pub fn get_commitment_mut(&mut self) -> &mut Option<edwards::Point<E, Unknown>> {
         &mut self.commitment
     }
 
-    pub fn get_commitment(&self) -> Option<&GA> {
+    pub fn get_commitment(&self) -> Option<&edwards::Point<E, Unknown>> {
         let commitment = &self.commitment;
 
         commitment.into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum VerkleNode<K, L, GA>
+#[derive(PartialEq)]
+pub enum VerkleNode<K, L, E>
 where
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     Leaf {
         path: K::Path,
@@ -329,17 +238,16 @@ where
     },
     Internal {
         path: K::Path,
-        children: HashMap<usize, VerkleNode<K, L, GA>>, // HashMap<u8, VerkleNode<K, V, GA>>
-        info: InternalNodeValue<GA>,
+        children: HashMap<usize, VerkleNode<K, L, E>>, // HashMap<u8, VerkleNode<K, V, GA>>
+        info: InternalNodeValue<E>,
     },
 }
 
-impl<K, L, GA> VerkleNode<K, L, GA>
+impl<K, L, E> VerkleNode<K, L, E>
 where
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     pub fn new_leaf_node_with_entry(path: K::Path, key: K, value: L::Value) -> Self {
         // let mut leaves = HashMap::new();
@@ -355,7 +263,7 @@ where
 
     pub fn new_internal_node_with_children(
         path: K::Path,
-        children: HashMap<usize, VerkleNode<K, L, GA>>,
+        children: HashMap<usize, VerkleNode<K, L, E>>,
     ) -> Self {
         let num_nonempty_children = children.len();
         Self::Internal {
@@ -390,7 +298,7 @@ where
     //     }
     // }
 
-    pub fn get_digest(&self) -> Option<&GA::Scalar> {
+    pub fn get_digest(&self) -> Option<&E::Fs> {
         match self {
             Self::Leaf { info, .. } => info.get_digest(),
             Self::Internal { info, .. } => info.get_digest(),
@@ -398,26 +306,24 @@ where
     }
 }
 
-impl<K, L, GA> Default for VerkleNode<K, L, GA>
+impl<K, L, E> Default for VerkleNode<K, L, E>
 where
     K: AbstractKey,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     fn default() -> Self {
         Self::new_internal_node_with_children(K::Path::default(), HashMap::new())
     }
 }
 
-impl<P, K, L, GA> VerkleNode<K, L, GA>
+impl<P, K, L, E> VerkleNode<K, L, E>
 where
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    <GA as CurveAffine>::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
     pub fn insert(&mut self, relative_path: K::Path, key: K, value: L::Value) -> Option<L::Value> {
         if relative_path.is_empty() {
@@ -615,28 +521,24 @@ where
     // }
 }
 
-pub fn compute_commitment_of_internal_node<GA: CurveAffine, C: Committer<GA>>(
+pub fn compute_commitment_of_internal_node<E: JubjubEngine, C: Committer<E>>(
     committer: &C,
-    children_digests: Vec<GA::Scalar>,
-) -> anyhow::Result<GA> {
+    children_digests: Vec<E::Fs>,
+) -> anyhow::Result<edwards::Point<E, Unknown>> {
     committer
         .commit(&children_digests)
         .or_else(|_| anyhow::bail!("Fail to make a commitment of given polynomial."))
 }
 
-impl<P, K, L, GA> VerkleNode<K, L, GA>
+impl<P, K, L, E> VerkleNode<K, L, E>
 where
     P: Default + AbstractPath,
     K: AbstractKey<Path = P>,
-    K::Stem: AbstractStem<Path = P> + IntoFieldElement<GA::Scalar>,
-    L: LeafNodeValue<K, GA>,
-    GA: CurveAffine,
-    GA::Base: PrimeField,
+    K::Stem: AbstractStem<Path = P> + IntoFieldElement<E::Fs>,
+    L: LeafNodeValue<K, E>,
+    E: JubjubEngine,
 {
-    pub fn compute_digest<C: Committer<GA>>(
-        &mut self,
-        committer: &C,
-    ) -> anyhow::Result<GA::Scalar> {
+    pub fn compute_digest<C: Committer<E>>(&mut self, committer: &C) -> anyhow::Result<E::Fs> {
         if let Some(d) = self.get_digest() {
             return Ok(*d);
         }
@@ -646,7 +548,7 @@ where
             VerkleNode::Internal { children, info, .. } => {
                 // TODO: info.compute_digest::<C>(children, committer)
                 let width = committer.get_domain_size();
-                let mut children_digests = vec![GA::Scalar::zero(); width];
+                let mut children_digests = vec![E::Fs::zero(); width];
                 for (&i, child) in children.iter_mut() {
                     children_digests[i] = child.compute_digest(committer)?;
                 }
